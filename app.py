@@ -185,7 +185,31 @@ def word_to_pdf(uploaded_file):
             story = story[:500]
             story.append(Paragraph("... (Content truncated for safety)", styles['Normal']))
         
-        pdf_doc.build(story)
+        try:
+            pdf_doc.build(story)
+        except Exception as layout_error:
+            # Fallback: create simple text-only PDF
+            st.warning("Complex layout failed, creating simplified text-only PDF...")
+            
+            # Extract all text content
+            simple_story = []
+            for slide_num, slide in enumerate(prs.slides):
+                simple_story.append(Paragraph(f"Slide {slide_num + 1}", title_style))
+                simple_story.append(Spacer(1, 12))
+                
+                for shape in slide.shapes:
+                    if hasattr(shape, "text") and shape.text.strip():
+                        # Simple text extraction only
+                        text = shape.text.strip()[:500]  # Limit text length
+                        simple_story.append(Paragraph(text, styles['Normal']))
+                        simple_story.append(Spacer(1, 6))
+                
+                if slide_num < len(prs.slides) - 1:
+                    simple_story.append(PageBreak())
+            
+            # Build simple version
+            pdf_doc.build(simple_story[:30])  # Very limited content
+        
         output.seek(0)
         return output
     except Exception as e:
@@ -249,14 +273,14 @@ def ppt_to_pdf(uploaded_file):
             raise ValueError("The PowerPoint file appears to be empty. Please check the file.")
         
         output = io.BytesIO()
-        # Use landscape orientation with larger margins to prevent overflow
+        # Use portrait orientation with very large margins for maximum safety
         pdf_doc = SimpleDocTemplate(
             output,
-            pagesize=landscape(letter),
-            leftMargin=1*inch,
-            rightMargin=1*inch,
-            topMargin=1*inch,
-            bottomMargin=1*inch
+            pagesize=letter,  # Changed to portrait for better text layout
+            leftMargin=1.5*inch,
+            rightMargin=1.5*inch,
+            topMargin=1.5*inch,
+            bottomMargin=1.5*inch
         )
         styles = getSampleStyleSheet()
         story = []
@@ -578,7 +602,27 @@ def ppt_to_pdf(uploaded_file):
             if i < len(prs.slides) - 1:
                 story.append(PageBreak())
         
-        pdf_doc.build(story)
+        # Critical safety check: limit total story elements to prevent infinite pages
+        if len(story) > 100:  # Very conservative limit
+            story = story[:100]
+            story.append(Paragraph("... (Content truncated for safety - file too large)", styles['Normal']))
+        
+        # Additional safety: remove any potentially problematic elements
+        safe_story = []
+        for element in story:
+            try:
+                # Test if element can be measured (basic validation)
+                if hasattr(element, 'wrap'):
+                    # Try to wrap with safe dimensions
+                    element.wrap(6*inch, 8*inch)
+                safe_story.append(element)
+                if len(safe_story) >= 50:  # Even more conservative limit
+                    break
+            except:
+                # Skip problematic elements
+                continue
+        
+        pdf_doc.build(safe_story)
         output.seek(0)
         return output
     except Exception as e:
