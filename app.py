@@ -191,21 +191,17 @@ def word_to_pdf(uploaded_file):
             # Fallback: create simple text-only PDF
             st.warning("Complex layout failed, creating simplified text-only PDF...")
             
-            # Extract all text content
+            # Extract all text content from Word document
             simple_story = []
-            for slide_num, slide in enumerate(prs.slides):
-                simple_story.append(Paragraph(f"Slide {slide_num + 1}", title_style))
-                simple_story.append(Spacer(1, 12))
-                
-                for shape in slide.shapes:
-                    if hasattr(shape, "text") and shape.text.strip():
-                        # Simple text extraction only
-                        text = shape.text.strip()[:500]  # Limit text length
-                        simple_story.append(Paragraph(text, styles['Normal']))
-                        simple_story.append(Spacer(1, 6))
-                
-                if slide_num < len(prs.slides) - 1:
-                    simple_story.append(PageBreak())
+            simple_story.append(Paragraph("Document Content", styles['Heading1']))
+            simple_story.append(Spacer(1, 12))
+            
+            for para in doc.paragraphs:
+                if para.text.strip():
+                    # Simple text extraction only
+                    text = para.text.strip()[:500]  # Limit text length
+                    simple_story.append(Paragraph(text, styles['Normal']))
+                    simple_story.append(Spacer(1, 6))
             
             # Build simple version
             pdf_doc.build(simple_story[:30])  # Very limited content
@@ -285,39 +281,11 @@ def ppt_to_pdf(uploaded_file):
         styles = getSampleStyleSheet()
         story = []
         
-        # Enhanced styles for better formatting
-        title_style = ParagraphStyle(
-            'SlideTitle',
-            parent=styles['Heading1'],
-            fontSize=32,
-            textColor=colors.HexColor('#4472C4'),
-            spaceAfter=20,
-            alignment=TA_CENTER,
-            leading=36,
-            fontName='Helvetica-Bold'
-        )
-        
-        subtitle_style = ParagraphStyle(
-            'SlideSubtitle',
-            parent=styles['Heading2'],
-            fontSize=24,
-            textColor=colors.HexColor('#4472C4'),
-            spaceAfter=15,
-            alignment=TA_CENTER,
-            leading=28,
-            fontName='Helvetica'
-        )
-        
-        body_style = ParagraphStyle(
-            'SlideBody',
-            parent=styles['Normal'],
-            fontSize=18,
-            spaceAfter=12,
-            leading=22,
-            bulletIndent=20,
-            fontName='Helvetica',
-            alignment=TA_LEFT
-        )
+        # Simplified styles for basic formatting
+        title_style = styles['h1']
+        subtitle_style = styles['h2']
+        body_style = styles['Normal']
+        bullet_style = styles['Normal']
         
         bullet_style = ParagraphStyle(
             'BulletStyle',
@@ -333,10 +301,6 @@ def ppt_to_pdf(uploaded_file):
         slides_to_process = list(prs.slides)[:max_slides]
         
         for i, slide in enumerate(slides_to_process):
-            # Add page break between slides except for the first slide
-            if i > 0:
-                story.append(PageBreak())
-            
             # Skip background handling to prevent layout issues
             # Background colors can cause table sizing problems
             
@@ -353,247 +317,31 @@ def ppt_to_pdf(uploaded_file):
                     if not hasattr(shape, 'shape_type'):
                         continue
                     
-                    # Handle pictures
-                    if shape.shape_type == 13:  # Picture
-                        try:
-                            image = shape.image
-                            image_bytes = image.blob
-                            
-                            # Create PIL Image for better handling
-                            pil_image = Image.open(io.BytesIO(image_bytes))
-                            
-                            # Convert RGBA to RGB if needed
-                            if pil_image.mode == 'RGBA':
-                                pil_image = pil_image.convert('RGB')
-                            
-                            # Get original dimensions
-                            img_width, img_height = pil_image.size
-                            
-                            # Get shape dimensions if available
-                            shape_width = shape.width.inches * inch if hasattr(shape, 'width') else None
-                            shape_height = shape.height.inches * inch if hasattr(shape, 'height') else None
-                            
-                            # Set maximum dimensions to fit within page bounds
-                            page_width = landscape(letter)[0] - 1 * inch  # Account for margins
-                            page_height = landscape(letter)[1] - 1 * inch  # Account for margins
-                            
-                            max_width = min(shape_width if shape_width else 6 * inch, page_width)
-                            max_height = min(shape_height if shape_height else 4 * inch, page_height)
-                            
-                            # Calculate dimensions while maintaining aspect ratio
-                            aspect = img_width / float(img_height)
-                            scaled_width = max_width
-                            scaled_height = max_width / aspect
-                            
-                            if scaled_height > max_height:
-                                scaled_height = max_height
-                                scaled_width = max_height * aspect
-                            
-                            # Ensure minimum size constraints
-                            min_size = 0.5 * inch
-                            scaled_width = max(scaled_width, min_size)
-                            scaled_height = max(scaled_height, min_size)
-                            
-                            # Save processed image with optimized quality
-                            output_image = io.BytesIO()
-                            
-                            # Determine best format based on image type
-                            if pil_image.mode in ['L', 'RGB']:
-                                save_format = 'JPEG'
-                                save_kwargs = {'quality': 95, 'optimize': True}
-                            else:
-                                save_format = 'PNG'
-                                save_kwargs = {'optimize': True}
-                            
-                            # Ensure dimensions are valid and not too large
-                            scaled_width = max(1, min(int(scaled_width), 600))  # Max 600 pixels
-                            scaled_height = max(1, min(int(scaled_height), 400))  # Max 400 pixels
-                            
-                            # Resize with high-quality resampling
-                            pil_image = pil_image.resize(
-                                (scaled_width, scaled_height),
-                                Image.Resampling.LANCZOS
-                            )
-                            
-                            # Save with optimal format and compression
-                            pil_image.save(output_image, format=save_format, **save_kwargs)
-                            output_image.seek(0)
-                            
-                            # Create image element
-                            img_reader = ImageReader(output_image)
-                            img = RLImage(img_reader, width=scaled_width, height=scaled_height)
-                            
-                            # Add image with proper spacing
-                            story.append(Spacer(1, 6))
-                            story.append(img)
-                            story.append(Spacer(1, 6))
-                        except Exception as e:
-                            print(f"Error processing image: {str(e)}")
-                            continue
-                        
                     # Handle text frames
-                    elif hasattr(shape, 'text_frame'):
+                    if hasattr(shape, 'text_frame'):
                         text_frame = shape.text_frame
                         if not hasattr(text_frame, 'paragraphs'):
                             continue
 
-                        # Process paragraphs in the text frame
-                        for para_idx, paragraph in enumerate(text_frame.paragraphs):
+                        # Process paragraphs in the text frame with simplified styling
+                        for paragraph in text_frame.paragraphs:
                             if not paragraph.text.strip():
                                 continue
                             
-                            # Determine paragraph style and formatting
-                            current_style = None
+                            # Use a single basic style for all text
+                            current_style = styles['Normal']
+                            current_style.fontSize = 8 # Very small default font size
+                            current_style.leading = 10
+                            current_style.spaceAfter = 2
+                            current_style.alignment = TA_LEFT # Force left alignment
                             
-                            # Check if shape is a placeholder
-                            is_placeholder = hasattr(shape, 'placeholder_format')
-                            placeholder_type = shape.placeholder_format.type if is_placeholder else None
+                            para_text = paragraph.text.strip()
                             
-                            # Determine style based on placeholder type and position
-                            if is_placeholder:
-                                if placeholder_type == 1:  # Title placeholder
-                                    current_style = ParagraphStyle(
-                                        'CustomTitle',
-                                        parent=title_style,
-                                        alignment=TA_CENTER
-                                    )
-                                elif placeholder_type == 2:  # Body placeholder
-                                    current_style = ParagraphStyle(
-                                        'CustomBody',
-                                        parent=body_style if not paragraph.level else bullet_style,
-                                        alignment=TA_LEFT
-                                    )
-                                elif placeholder_type == 3:  # Subtitle placeholder
-                                    current_style = ParagraphStyle(
-                                        'CustomSubtitle',
-                                        parent=subtitle_style,
-                                        alignment=TA_CENTER
-                                    )
-                                else:  # Other placeholder types
-                                    current_style = ParagraphStyle(
-                                        'CustomBody',
-                                        parent=body_style if not paragraph.level else bullet_style,
-                                        alignment=TA_LEFT
-                                    )
-                            else:  # Non-placeholder shapes with text
-                                current_style = ParagraphStyle(
-                                    'CustomBody',
-                                    parent=body_style if not paragraph.level else bullet_style,
-                                    alignment=TA_LEFT
-                                )
+                            # Limit paragraph length to prevent overflow
+                            if len(para_text) > 500:  # Even more aggressive truncation
+                                para_text = para_text[:500] + "..."
                             
-                            # Handle bullet points with proper indentation (limit levels to prevent overflow)
-                            if paragraph.level > 0:
-                                # Limit bullet levels to prevent excessive indentation
-                                level = min(paragraph.level, 5)
-                                current_style.leftIndent = (level * 15)
-                                current_style.bulletIndent = (level * 15) - 10
-                                bullet_char = '•'  # Can be customized based on level
-                                current_style.bulletText = bullet_char
-                            
-                            # Apply text formatting with color and font size
-                            formatted_text = []
-                            for run in paragraph.runs:
-                                text = run.text
-                                format_tags = []
-                                
-                                # Handle text formatting
-                                if run.bold:
-                                    format_tags.append(('b', text))
-                                if run.italic:
-                                    format_tags.append(('i', text))
-                                if run.underline:
-                                    format_tags.append(('u', text))
-                                
-                                # Apply font color if available
-                                try:
-                                    if run.font.color.rgb:
-                                        color = f"#{run.font.color.rgb:06x}"
-                                        format_tags.append(('color', color))
-                                except:
-                                    pass
-                                
-                                # Apply font size if available (with reasonable limits)
-                            try:
-                                if run.font.size:
-                                    size = run.font.size.pt
-                                    # Limit font size to prevent layout issues
-                                    size = max(8, min(size, 72))  # Between 8pt and 72pt
-                                    current_style.fontSize = size
-                            except:
-                                pass
-                                
-                                # Apply all formatting
-                                formatted = text
-                                for tag, value in format_tags:
-                                    if tag == 'color':
-                                        formatted = f'<font color="{value}">{formatted}</font>'
-                                    else:
-                                        formatted = f'<{tag}>{formatted}</{tag}>'
-                                
-                                formatted_text.append(formatted)
-                            
-                            para_text = "".join(formatted_text)
-                            
-                            # Handle paragraph alignment
-                            try:
-                                if hasattr(paragraph, 'alignment') and paragraph.alignment is not None:
-                                    # Map PowerPoint alignment to ReportLab alignment
-                                    alignment_map = {
-                                        0: TA_LEFT,      # Left
-                                        1: TA_CENTER,    # Center
-                                        2: TA_RIGHT,     # Right
-                                        3: TA_JUSTIFY    # Justify
-                                    }
-                                    current_style.alignment = alignment_map.get(paragraph.alignment, TA_LEFT)
-                            except:
-                                # Default to left alignment if there's an error
-                                current_style.alignment = TA_LEFT
-                            
-                            # Add the paragraph with proper style and length check
-                            if para_text.strip():  # Only add non-empty paragraphs
-                                # Limit paragraph length to prevent overflow
-                                if len(para_text) > 5000:  # Truncate very long paragraphs
-                                    para_text = para_text[:5000] + "..."
-                                story.append(Paragraph(para_text, current_style))
-                                story.append(Spacer(1, 3))  # Small spacing between paragraphs
-                    
-                    # Handle tables
-                    elif hasattr(shape, 'has_table') and shape.has_table:
-                        table_data = []
-                        for row in shape.table.rows:
-                            row_data = [cell.text for cell in row.cells]
-                            table_data.append(row_data)
-                        
-                        if table_data:
-                            # Limit table size to prevent overflow
-                            max_rows = 20  # Limit number of rows
-                            max_cols = 10  # Limit number of columns
-                            
-                            # Truncate table if too large
-                            if len(table_data) > max_rows:
-                                table_data = table_data[:max_rows]
-                            
-                            for i, row in enumerate(table_data):
-                                if len(row) > max_cols:
-                                    table_data[i] = row[:max_cols]
-                            
-                            # Calculate column widths to fit page
-                            page_width = landscape(letter)[0] - 1 * inch
-                            col_width = page_width / len(table_data[0]) if table_data[0] else page_width
-                            col_widths = [min(col_width, 2 * inch)] * len(table_data[0])
-                            
-                            t = Table(table_data, colWidths=col_widths)
-                            t.setStyle(TableStyle([
-                                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-                                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                                ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                                ('FONTSIZE', (0, 0), (-1, -1), 8),  # Smaller font for tables
-                                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                            ]))
-                            story.append(t)
-                            story.append(Spacer(1, 12))
+                            story.append(Paragraph(para_text, current_style))
                 
                 except Exception as e:
                     print(f"Error processing shape: {str(e)}")
