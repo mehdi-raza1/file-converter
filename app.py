@@ -228,56 +228,259 @@ def excel_to_pdf(uploaded_file):
         return None
 
 def ppt_to_pdf(uploaded_file):
-    """Convert PowerPoint to PDF"""
+    """Convert PowerPoint to PDF with enhanced formatting preservation"""
     try:
+        # Validate file size
+        file_content = uploaded_file.read()
+        if len(file_content) > 50 * 1024 * 1024:  # 50MB limit
+            raise ValueError("File size too large. Please upload a file smaller than 50MB.")
+        
+        # Reset file pointer and load presentation
+        uploaded_file.seek(0)
         prs = Presentation(uploaded_file)
         
+        # Validate slide count
+        if len(prs.slides) == 0:
+            raise ValueError("The PowerPoint file appears to be empty. Please check the file.")
+        
         output = io.BytesIO()
-        pdf_doc = SimpleDocTemplate(output, pagesize=letter)
+        # Use landscape orientation with margins for better slide layout
+        pdf_doc = SimpleDocTemplate(
+            output,
+            pagesize=landscape(letter),
+            leftMargin=0.5*inch,
+            rightMargin=0.5*inch,
+            topMargin=0.5*inch,
+            bottomMargin=0.5*inch
+        )
         styles = getSampleStyleSheet()
         story = []
         
+        # Enhanced styles for better formatting
         title_style = ParagraphStyle(
             'SlideTitle',
             parent=styles['Heading1'],
-            fontSize=24,
+            fontSize=32,
             textColor=colors.HexColor('#4472C4'),
             spaceAfter=20,
-            alignment=TA_CENTER
+            alignment=TA_CENTER,
+            leading=36,
+            fontName='Helvetica-Bold'
+        )
+        
+        subtitle_style = ParagraphStyle(
+            'SlideSubtitle',
+            parent=styles['Heading2'],
+            fontSize=24,
+            textColor=colors.HexColor('#4472C4'),
+            spaceAfter=15,
+            alignment=TA_CENTER,
+            leading=28,
+            fontName='Helvetica'
+        )
+        
+        body_style = ParagraphStyle(
+            'SlideBody',
+            parent=styles['Normal'],
+            fontSize=18,
+            spaceAfter=12,
+            leading=22,
+            bulletIndent=20,
+            fontName='Helvetica',
+            alignment=TA_LEFT
+        )
+        
+        bullet_style = ParagraphStyle(
+            'BulletStyle',
+            parent=body_style,
+            leftIndent=20,
+            bulletIndent=10,
+            spaceAfter=10,
+            bulletFontName='Symbol'
         )
         
         for i, slide in enumerate(prs.slides):
-            story.append(Paragraph(f"<b>Slide {i+1}</b>", title_style))
-            story.append(Spacer(1, 12))
+            # Add page break between slides except for the first slide
+            if i > 0:
+                story.append(PageBreak())
             
+            # Add slide background if available
+            if hasattr(slide, 'background') and slide.background.fill.type:
+                try:
+                    if slide.background.fill.fore_color.type:
+                        bg_color = f"#{slide.background.fill.fore_color.rgb:06x}"
+                        story.append(Table([['']], colWidths=[pdf_doc.width], rowHeights=[pdf_doc.height],
+                                        style=[('BACKGROUND', (0,0), (-1,-1), colors.HexColor(bg_color))]))
+                except:
+                    pass  # Skip if background color cannot be determined
+            
+            # Process slide content
             for shape in slide.shapes:
-                if hasattr(shape, "text") and shape.text:
-                    text = shape.text.strip()
-                    if text:
-                        story.append(Paragraph(text, styles['Normal']))
-                        story.append(Spacer(1, 8))
+                if shape.has_text_frame:
+                    text_frame = shape.text_frame
+                    
+                    # Process paragraphs in the text frame
+                    for para_idx, paragraph in enumerate(text_frame.paragraphs):
+                        if not paragraph.text.strip():
+                            continue
+                        
+                        # Determine paragraph style and formatting
+                        current_style = None
+                        if para_idx == 0 and shape.is_title:
+                            current_style = ParagraphStyle(
+                                'CustomTitle',
+                                parent=title_style,
+                                alignment=shape.text_frame.paragraphs[0].alignment or TA_CENTER
+                            )
+                        elif shape.is_placeholder and shape.placeholder_format.idx == 1:
+                            current_style = ParagraphStyle(
+                                'CustomSubtitle',
+                                parent=subtitle_style,
+                                alignment=paragraph.alignment or TA_CENTER
+                            )
+                        else:
+                            current_style = ParagraphStyle(
+                                'CustomBody',
+                                parent=body_style if not paragraph.level else bullet_style,
+                                alignment=paragraph.alignment or TA_LEFT
+                            )
+                        
+                        # Handle bullet points with proper indentation
+                        if paragraph.level > 0:
+                            current_style.leftIndent = (paragraph.level * 20)
+                            current_style.bulletIndent = (paragraph.level * 20) - 10
+                            bullet_char = '•'  # Can be customized based on level
+                            current_style.bulletText = bullet_char
+                        
+                        # Apply text formatting with color and font size
+                        formatted_text = []
+                        for run in paragraph.runs:
+                            text = run.text
+                            format_tags = []
+                            
+                            # Handle text formatting
+                            if run.bold:
+                                format_tags.append(('b', text))
+                            if run.italic:
+                                format_tags.append(('i', text))
+                            if run.underline:
+                                format_tags.append(('u', text))
+                            
+                            # Apply font color if available
+                            try:
+                                if run.font.color.rgb:
+                                    color = f"#{run.font.color.rgb:06x}"
+                                    format_tags.append(('color', color))
+                            except:
+                                pass
+                            
+                            # Apply font size if available
+                            try:
+                                if run.font.size:
+                                    size = run.font.size.pt
+                                    current_style.fontSize = size
+                            except:
+                                pass
+                            
+                            # Apply all formatting
+                            formatted = text
+                            for tag, value in format_tags:
+                                if tag == 'color':
+                                    formatted = f'<font color="{value}">{formatted}</font>'
+                                else:
+                                    formatted = f'<{tag}>{formatted}</{tag}>'
+                            
+                            formatted_text.append(formatted)
+                        
+                        para_text = "".join(formatted_text)
+                        story.append(Paragraph(para_text, current_style))
                 
-                if shape.shape_type == 13:  # Picture
+                elif shape.shape_type == 13:  # Picture
                     try:
                         image = shape.image
                         image_bytes = image.blob
                         
-                        img = ImageReader(io.BytesIO(image_bytes))
-                        img_width, img_height = img.getSize()
+                        # Create PIL Image for better handling
+                        pil_image = Image.open(io.BytesIO(image_bytes))
                         
-                        max_width = 6 * inch
-                        max_height = 4 * inch
+                        # Convert RGBA to RGB if needed
+                        if pil_image.mode == 'RGBA':
+                            pil_image = pil_image.convert('RGB')
                         
-                        aspect = img_height / float(img_width)
-                        if img_width > max_width:
-                            img_width = max_width
-                            img_height = img_width * aspect
-                        if img_height > max_height:
-                            img_height = max_height
-                            img_width = img_height / aspect
+                        # Get original dimensions
+                        img_width, img_height = pil_image.size
                         
-                        rl_image = RLImage(io.BytesIO(image_bytes), width=img_width, height=img_height)
-                        story.append(rl_image)
+                        # Get shape dimensions if available
+                        shape_width = shape.width.inches * inch if hasattr(shape, 'width') else None
+                        shape_height = shape.height.inches * inch if hasattr(shape, 'height') else None
+                        
+                        # Use shape dimensions if available, otherwise use defaults
+                        max_width = shape_width if shape_width else 8 * inch  # Default for landscape orientation
+                        max_height = shape_height if shape_height else 6 * inch  # Default height
+                        max_height = shape_height if shape_height else 6 * inch
+                        
+                        # Calculate dimensions while maintaining aspect ratio
+                        aspect = img_width / float(img_height)
+                        scaled_width = max_width
+                        scaled_height = max_width / aspect
+                        
+                        if scaled_height > max_height:
+                            scaled_height = max_height
+                            scaled_width = max_height * aspect
+                        
+                        # Get shape position if available
+                        left = shape.left.inches * inch if hasattr(shape, 'left') else None
+                        top = shape.top.inches * inch if hasattr(shape, 'top') else None
+                        
+                        # Save processed image with optimized quality
+                        output_image = io.BytesIO()
+                        
+                        # Determine best format based on image type
+                        if pil_image.mode in ['L', 'RGB']:
+                            save_format = 'JPEG'
+                            save_kwargs = {'quality': 95, 'optimize': True}
+                        else:
+                            save_format = 'PNG'
+                            save_kwargs = {'optimize': True}
+                        
+                        # Resize with high-quality resampling
+                        pil_image = pil_image.resize(
+                            (int(scaled_width), int(scaled_height)),
+                            Image.Resampling.LANCZOS
+                        )
+                        
+                        # Save with optimal format and compression
+                        pil_image.save(output_image, format=save_format, **save_kwargs)
+                        output_image.seek(0)
+                        
+                        # Create image element
+                        img = Image(output_image, width=scaled_width, height=scaled_height)
+                        
+                        # Position the image
+                        if left is not None and top is not None:
+                            # Use absolute positioning if we have position information
+                            img.drawHeight = scaled_height
+                            img.drawWidth = scaled_width
+                            img._offs_x = left
+                            img._offs_y = top
+                            story.append(img)
+                        else:
+                            # Center the image if we don't have position information
+                            story.append(Spacer(1, 12))
+                            img_table = Table(
+                                [[img]], 
+                                colWidths=[pdf_doc.width],
+                                rowHeights=[scaled_height + 24],
+                                style=[
+                                    ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                                    ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                                    ('LEFTPADDING', (0,0), (-1,-1), 0),
+                                    ('RIGHTPADDING', (0,0), (-1,-1), 0),
+                                    ('TOPPADDING', (0,0), (-1,-1), 12),
+                                    ('BOTTOMPADDING', (0,0), (-1,-1), 12),
+                                ]
+                            )
+                            story.append(img_table)
                         story.append(Spacer(1, 12))
                     except:
                         pass
@@ -450,18 +653,42 @@ def pdf_to_images(uploaded_file, format='JPEG'):
         return None
 
 def merge_pdfs(uploaded_files):
-    """Merge multiple PDFs"""
+    """Merge multiple PDFs with memory optimization"""
     try:
+        # Validate total file size
+        total_size = sum(len(file.getvalue()) for file in uploaded_files)
+        if total_size > 100 * 1024 * 1024:  # 100MB limit
+            raise ValueError("Total file size too large. Please keep total size under 100MB.")
+        
         pdf_writer = PyPDF2.PdfWriter()
+        total_pages = 0
         
         for uploaded_file in uploaded_files:
+            # Reset file pointer
+            uploaded_file.seek(0)
+            
+            # Read PDF
             pdf_reader = PyPDF2.PdfReader(uploaded_file)
+            current_pages = len(pdf_reader.pages)
+            
+            # Check page limit
+            total_pages += current_pages
+            if total_pages > 500:  # Limit total pages
+                raise ValueError("Too many pages. Please keep total pages under 500.")
+            
+            # Add pages with memory optimization
             for page in pdf_reader.pages:
                 pdf_writer.add_page(page)
+                # Clear page from memory
+                page.clear()
         
+        # Write output with compression
         output = io.BytesIO()
         pdf_writer.write(output)
         output.seek(0)
+        
+        # Clear writer from memory
+        pdf_writer.close()
         return output
     except Exception as e:
         st.error(f"Error: {str(e)}")
