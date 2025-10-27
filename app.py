@@ -299,7 +299,11 @@ def ppt_to_pdf(uploaded_file):
             bulletFontName='Symbol'
         )
         
-        for i, slide in enumerate(prs.slides):
+        # Limit number of slides to prevent excessive processing
+        max_slides = 50  # Reasonable limit for most presentations
+        slides_to_process = list(prs.slides)[:max_slides]
+        
+        for i, slide in enumerate(slides_to_process):
             # Add page break between slides except for the first slide
             if i > 0:
                 story.append(PageBreak())
@@ -341,9 +345,12 @@ def ppt_to_pdf(uploaded_file):
                             shape_width = shape.width.inches * inch if hasattr(shape, 'width') else None
                             shape_height = shape.height.inches * inch if hasattr(shape, 'height') else None
                             
-                            # Use shape dimensions if available, otherwise use defaults
-                            max_width = shape_width if shape_width else 8 * inch
-                            max_height = shape_height if shape_height else 6 * inch
+                            # Set maximum dimensions to fit within page bounds
+                            page_width = landscape(letter)[0] - 1 * inch  # Account for margins
+                            page_height = landscape(letter)[1] - 1 * inch  # Account for margins
+                            
+                            max_width = min(shape_width if shape_width else 6 * inch, page_width)
+                            max_height = min(shape_height if shape_height else 4 * inch, page_height)
                             
                             # Calculate dimensions while maintaining aspect ratio
                             aspect = img_width / float(img_height)
@@ -353,6 +360,11 @@ def ppt_to_pdf(uploaded_file):
                             if scaled_height > max_height:
                                 scaled_height = max_height
                                 scaled_width = max_height * aspect
+                            
+                            # Ensure minimum size constraints
+                            min_size = 0.5 * inch
+                            scaled_width = max(scaled_width, min_size)
+                            scaled_height = max(scaled_height, min_size)
                             
                             # Save processed image with optimized quality
                             output_image = io.BytesIO()
@@ -379,23 +391,10 @@ def ppt_to_pdf(uploaded_file):
                             img_reader = ImageReader(output_image)
                             img = RLImage(img_reader, width=scaled_width, height=scaled_height)
                             
-                            # Center the image
-                            story.append(Spacer(1, 12))
-                            img_table = Table(
-                                [[img]], 
-                                colWidths=[pdf_doc.width],
-                                rowHeights=[scaled_height + 24],
-                                style=[
-                                    ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-                                    ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-                                    ('LEFTPADDING', (0,0), (-1,-1), 0),
-                                    ('RIGHTPADDING', (0,0), (-1,-1), 0),
-                                    ('TOPPADDING', (0,0), (-1,-1), 12),
-                                    ('BOTTOMPADDING', (0,0), (-1,-1), 12),
-                                ]
-                            )
-                            story.append(img_table)
-                            story.append(Spacer(1, 12))
+                            # Add image with proper spacing
+                            story.append(Spacer(1, 6))
+                            story.append(img)
+                            story.append(Spacer(1, 6))
                         except Exception as e:
                             print(f"Error processing image: {str(e)}")
                             continue
@@ -451,10 +450,12 @@ def ppt_to_pdf(uploaded_file):
                                     alignment=TA_LEFT
                                 )
                             
-                            # Handle bullet points with proper indentation
+                            # Handle bullet points with proper indentation (limit levels to prevent overflow)
                             if paragraph.level > 0:
-                                current_style.leftIndent = (paragraph.level * 20)
-                                current_style.bulletIndent = (paragraph.level * 20) - 10
+                                # Limit bullet levels to prevent excessive indentation
+                                level = min(paragraph.level, 5)
+                                current_style.leftIndent = (level * 15)
+                                current_style.bulletIndent = (level * 15) - 10
                                 bullet_char = '•'  # Can be customized based on level
                                 current_style.bulletText = bullet_char
                             
@@ -480,13 +481,15 @@ def ppt_to_pdf(uploaded_file):
                                 except:
                                     pass
                                 
-                                # Apply font size if available
-                                try:
-                                    if run.font.size:
-                                        size = run.font.size.pt
-                                        current_style.fontSize = size
-                                except:
-                                    pass
+                                # Apply font size if available (with reasonable limits)
+                            try:
+                                if run.font.size:
+                                    size = run.font.size.pt
+                                    # Limit font size to prevent layout issues
+                                    size = max(8, min(size, 72))  # Between 8pt and 72pt
+                                    current_style.fontSize = size
+                            except:
+                                pass
                                 
                                 # Apply all formatting
                                 formatted = text
@@ -515,8 +518,13 @@ def ppt_to_pdf(uploaded_file):
                                 # Default to left alignment if there's an error
                                 current_style.alignment = TA_LEFT
                             
-                            # Add the paragraph with proper style
-                            story.append(Paragraph(para_text, current_style))
+                            # Add the paragraph with proper style and length check
+                            if para_text.strip():  # Only add non-empty paragraphs
+                                # Limit paragraph length to prevent overflow
+                                if len(para_text) > 5000:  # Truncate very long paragraphs
+                                    para_text = para_text[:5000] + "..."
+                                story.append(Paragraph(para_text, current_style))
+                                story.append(Spacer(1, 3))  # Small spacing between paragraphs
                     
                     # Handle tables
                     elif hasattr(shape, 'has_table') and shape.has_table:
@@ -526,12 +534,31 @@ def ppt_to_pdf(uploaded_file):
                             table_data.append(row_data)
                         
                         if table_data:
-                            t = Table(table_data)
+                            # Limit table size to prevent overflow
+                            max_rows = 20  # Limit number of rows
+                            max_cols = 10  # Limit number of columns
+                            
+                            # Truncate table if too large
+                            if len(table_data) > max_rows:
+                                table_data = table_data[:max_rows]
+                            
+                            for i, row in enumerate(table_data):
+                                if len(row) > max_cols:
+                                    table_data[i] = row[:max_cols]
+                            
+                            # Calculate column widths to fit page
+                            page_width = landscape(letter)[0] - 1 * inch
+                            col_width = page_width / len(table_data[0]) if table_data[0] else page_width
+                            col_widths = [min(col_width, 2 * inch)] * len(table_data[0])
+                            
+                            t = Table(table_data, colWidths=col_widths)
                             t.setStyle(TableStyle([
                                 ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
                                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                                 ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                                ('FONTSIZE', (0, 0), (-1, -1), 8),  # Smaller font for tables
+                                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
                             ]))
                             story.append(t)
                             story.append(Spacer(1, 12))
