@@ -326,11 +326,11 @@ def ppt_to_pdf(uploaded_file):
                         text_frame = shape.text_frame
                         if not hasattr(text_frame, 'paragraphs'):
                             continue
-                    
-                    # Process paragraphs in the text frame
-                    for para_idx, paragraph in enumerate(text_frame.paragraphs):
-                        if not paragraph.text.strip():
-                            continue
+                        
+                        # Process paragraphs in the text frame
+                        for para_idx, paragraph in enumerate(text_frame.paragraphs):
+                            if not paragraph.text.strip():
+                                continue
                         
                         # Determine paragraph style and formatting
                         current_style = None
