@@ -180,6 +180,11 @@ def word_to_pdf(uploaded_file):
                 story.append(t)
                 story.append(Spacer(1, 12))
         
+        # Safety check: limit total story elements to prevent infinite pages
+        if len(story) > 500:  # Limit total elements
+            story = story[:500]
+            story.append(Paragraph("... (Content truncated for safety)", styles['Normal']))
+        
         pdf_doc.build(story)
         output.seek(0)
         return output
@@ -244,14 +249,14 @@ def ppt_to_pdf(uploaded_file):
             raise ValueError("The PowerPoint file appears to be empty. Please check the file.")
         
         output = io.BytesIO()
-        # Use landscape orientation with margins for better slide layout
+        # Use landscape orientation with larger margins to prevent overflow
         pdf_doc = SimpleDocTemplate(
             output,
             pagesize=landscape(letter),
-            leftMargin=0.5*inch,
-            rightMargin=0.5*inch,
-            topMargin=0.5*inch,
-            bottomMargin=0.5*inch
+            leftMargin=1*inch,
+            rightMargin=1*inch,
+            topMargin=1*inch,
+            bottomMargin=1*inch
         )
         styles = getSampleStyleSheet()
         story = []
@@ -308,18 +313,17 @@ def ppt_to_pdf(uploaded_file):
             if i > 0:
                 story.append(PageBreak())
             
-            # Add slide background if available
-            if hasattr(slide, 'background') and slide.background.fill.type:
-                try:
-                    if slide.background.fill.fore_color.type:
-                        bg_color = f"#{slide.background.fill.fore_color.rgb:06x}"
-                        story.append(Table([['']], colWidths=[pdf_doc.width], rowHeights=[pdf_doc.height],
-                                        style=[('BACKGROUND', (0,0), (-1,-1), colors.HexColor(bg_color))]))
-                except:
-                    pass  # Skip if background color cannot be determined
+            # Skip background handling to prevent layout issues
+            # Background colors can cause table sizing problems
             
-            # Process slide content
+            # Process slide content with limits
+            shape_count = 0
+            max_shapes_per_slide = 20  # Limit shapes per slide
+            
             for shape in slide.shapes:
+                shape_count += 1
+                if shape_count > max_shapes_per_slide:
+                    break  # Skip remaining shapes if too many
                 try:
                     # Skip empty or invalid shapes
                     if not hasattr(shape, 'shape_type'):
@@ -377,9 +381,13 @@ def ppt_to_pdf(uploaded_file):
                                 save_format = 'PNG'
                                 save_kwargs = {'optimize': True}
                             
+                            # Ensure dimensions are valid and not too large
+                            scaled_width = max(1, min(int(scaled_width), 600))  # Max 600 pixels
+                            scaled_height = max(1, min(int(scaled_height), 400))  # Max 400 pixels
+                            
                             # Resize with high-quality resampling
                             pil_image = pil_image.resize(
-                                (int(scaled_width), int(scaled_height)),
+                                (scaled_width, scaled_height),
                                 Image.Resampling.LANCZOS
                             )
                             
