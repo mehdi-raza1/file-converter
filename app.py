@@ -316,8 +316,16 @@ def ppt_to_pdf(uploaded_file):
             
             # Process slide content
             for shape in slide.shapes:
-                if shape.has_text_frame:
-                    text_frame = shape.text_frame
+                try:
+                    # Skip empty or invalid shapes
+                    if not hasattr(shape, 'shape_type'):
+                        continue
+                        
+                    # Handle text frames
+                    if hasattr(shape, 'text_frame'):
+                        text_frame = shape.text_frame
+                        if not hasattr(text_frame, 'paragraphs'):
+                            continue
                     
                     # Process paragraphs in the text frame
                     for para_idx, paragraph in enumerate(text_frame.paragraphs):
@@ -326,19 +334,38 @@ def ppt_to_pdf(uploaded_file):
                         
                         # Determine paragraph style and formatting
                         current_style = None
-                        if para_idx == 0 and shape.is_title:
-                            current_style = ParagraphStyle(
-                                'CustomTitle',
-                                parent=title_style,
-                                alignment=shape.text_frame.paragraphs[0].alignment or TA_CENTER
-                            )
-                        elif shape.is_placeholder and shape.placeholder_format.idx == 1:
-                            current_style = ParagraphStyle(
-                                'CustomSubtitle',
-                                parent=subtitle_style,
-                                alignment=paragraph.alignment or TA_CENTER
-                            )
-                        else:
+                        
+                        # Check if shape is a placeholder
+                        is_placeholder = hasattr(shape, 'placeholder_format')
+                        placeholder_type = shape.placeholder_format.type if is_placeholder else None
+                        
+                        # Determine style based on placeholder type and position
+                        if is_placeholder:
+                            if placeholder_type == 1:  # Title placeholder
+                                current_style = ParagraphStyle(
+                                    'CustomTitle',
+                                    parent=title_style,
+                                    alignment=shape.text_frame.paragraphs[0].alignment or TA_CENTER
+                                )
+                            elif placeholder_type == 2:  # Body placeholder
+                                current_style = ParagraphStyle(
+                                    'CustomBody',
+                                    parent=body_style if not paragraph.level else bullet_style,
+                                    alignment=paragraph.alignment or TA_LEFT
+                                )
+                            elif placeholder_type == 3:  # Subtitle placeholder
+                                current_style = ParagraphStyle(
+                                    'CustomSubtitle',
+                                    parent=subtitle_style,
+                                    alignment=paragraph.alignment or TA_CENTER
+                                )
+                            else:  # Other placeholder types
+                                current_style = ParagraphStyle(
+                                    'CustomBody',
+                                    parent=body_style if not paragraph.level else bullet_style,
+                                    alignment=paragraph.alignment or TA_LEFT
+                                )
+                        else:  # Non-placeholder shapes with text
                             current_style = ParagraphStyle(
                                 'CustomBody',
                                 parent=body_style if not paragraph.level else bullet_style,
@@ -393,6 +420,23 @@ def ppt_to_pdf(uploaded_file):
                             formatted_text.append(formatted)
                         
                         para_text = "".join(formatted_text)
+                        
+                        # Handle paragraph alignment
+                        try:
+                            if hasattr(paragraph, 'alignment') and paragraph.alignment is not None:
+                                # Map PowerPoint alignment to ReportLab alignment
+                                alignment_map = {
+                                    0: TA_LEFT,      # Left
+                                    1: TA_CENTER,    # Center
+                                    2: TA_RIGHT,     # Right
+                                    3: TA_JUSTIFY    # Justify
+                                }
+                                current_style.alignment = alignment_map.get(paragraph.alignment, TA_LEFT)
+                        except:
+                            # Default to left alignment if there's an error
+                            current_style.alignment = TA_LEFT
+                        
+                        # Add the paragraph with proper style
                         story.append(Paragraph(para_text, current_style))
                 
                 elif shape.shape_type == 13:  # Picture
