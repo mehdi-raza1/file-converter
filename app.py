@@ -320,196 +320,66 @@ def ppt_to_pdf(uploaded_file):
                     # Skip empty or invalid shapes
                     if not hasattr(shape, 'shape_type'):
                         continue
-                        
-                    # Handle text frames
-                    if hasattr(shape, 'text_frame'):
-                        text_frame = shape.text_frame
-                        if not hasattr(text_frame, 'paragraphs'):
-                            continue
-                        
-                        # Process paragraphs in the text frame
-                        for para_idx, paragraph in enumerate(text_frame.paragraphs):
-                            if not paragraph.text.strip():
-                                continue
-                        
-                        # Determine paragraph style and formatting
-                        current_style = None
-                        
-                        # Check if shape is a placeholder
-                        is_placeholder = hasattr(shape, 'placeholder_format')
-                        placeholder_type = shape.placeholder_format.type if is_placeholder else None
-                        
-                        # Determine style based on placeholder type and position
-                        if is_placeholder:
-                            if placeholder_type == 1:  # Title placeholder
-                                current_style = ParagraphStyle(
-                                    'CustomTitle',
-                                    parent=title_style,
-                                    alignment=shape.text_frame.paragraphs[0].alignment or TA_CENTER
-                                )
-                            elif placeholder_type == 2:  # Body placeholder
-                                current_style = ParagraphStyle(
-                                    'CustomBody',
-                                    parent=body_style if not paragraph.level else bullet_style,
-                                    alignment=paragraph.alignment or TA_LEFT
-                                )
-                            elif placeholder_type == 3:  # Subtitle placeholder
-                                current_style = ParagraphStyle(
-                                    'CustomSubtitle',
-                                    parent=subtitle_style,
-                                    alignment=paragraph.alignment or TA_CENTER
-                                )
-                            else:  # Other placeholder types
-                                current_style = ParagraphStyle(
-                                    'CustomBody',
-                                    parent=body_style if not paragraph.level else bullet_style,
-                                    alignment=paragraph.alignment or TA_LEFT
-                                )
-                        else:  # Non-placeholder shapes with text
-                            current_style = ParagraphStyle(
-                                'CustomBody',
-                                parent=body_style if not paragraph.level else bullet_style,
-                                alignment=paragraph.alignment or TA_LEFT
-                            )
-                        
-                        # Handle bullet points with proper indentation
-                        if paragraph.level > 0:
-                            current_style.leftIndent = (paragraph.level * 20)
-                            current_style.bulletIndent = (paragraph.level * 20) - 10
-                            bullet_char = '•'  # Can be customized based on level
-                            current_style.bulletText = bullet_char
-                        
-                        # Apply text formatting with color and font size
-                        formatted_text = []
-                        for run in paragraph.runs:
-                            text = run.text
-                            format_tags = []
-                            
-                            # Handle text formatting
-                            if run.bold:
-                                format_tags.append(('b', text))
-                            if run.italic:
-                                format_tags.append(('i', text))
-                            if run.underline:
-                                format_tags.append(('u', text))
-                            
-                            # Apply font color if available
-                            try:
-                                if run.font.color.rgb:
-                                    color = f"#{run.font.color.rgb:06x}"
-                                    format_tags.append(('color', color))
-                            except:
-                                pass
-                            
-                            # Apply font size if available
-                            try:
-                                if run.font.size:
-                                    size = run.font.size.pt
-                                    current_style.fontSize = size
-                            except:
-                                pass
-                            
-                            # Apply all formatting
-                            formatted = text
-                            for tag, value in format_tags:
-                                if tag == 'color':
-                                    formatted = f'<font color="{value}">{formatted}</font>'
-                                else:
-                                    formatted = f'<{tag}>{formatted}</{tag}>'
-                            
-                            formatted_text.append(formatted)
-                        
-                        para_text = "".join(formatted_text)
-                        
-                        # Handle paragraph alignment
+                    
+                    # Handle pictures
+                    if shape.shape_type == 13:  # Picture
                         try:
-                            if hasattr(paragraph, 'alignment') and paragraph.alignment is not None:
-                                # Map PowerPoint alignment to ReportLab alignment
-                                alignment_map = {
-                                    0: TA_LEFT,      # Left
-                                    1: TA_CENTER,    # Center
-                                    2: TA_RIGHT,     # Right
-                                    3: TA_JUSTIFY    # Justify
-                                }
-                                current_style.alignment = alignment_map.get(paragraph.alignment, TA_LEFT)
-                        except:
-                            # Default to left alignment if there's an error
-                            current_style.alignment = TA_LEFT
-                        
-                        # Add the paragraph with proper style
-                        story.append(Paragraph(para_text, current_style))
-                
-                elif shape.shape_type == 13:  # Picture
-                    try:
-                        image = shape.image
-                        image_bytes = image.blob
-                        
-                        # Create PIL Image for better handling
-                        pil_image = Image.open(io.BytesIO(image_bytes))
-                        
-                        # Convert RGBA to RGB if needed
-                        if pil_image.mode == 'RGBA':
-                            pil_image = pil_image.convert('RGB')
-                        
-                        # Get original dimensions
-                        img_width, img_height = pil_image.size
-                        
-                        # Get shape dimensions if available
-                        shape_width = shape.width.inches * inch if hasattr(shape, 'width') else None
-                        shape_height = shape.height.inches * inch if hasattr(shape, 'height') else None
-                        
-                        # Use shape dimensions if available, otherwise use defaults
-                        max_width = shape_width if shape_width else 8 * inch  # Default for landscape orientation
-                        max_height = shape_height if shape_height else 6 * inch  # Default height
-                        max_height = shape_height if shape_height else 6 * inch
-                        
-                        # Calculate dimensions while maintaining aspect ratio
-                        aspect = img_width / float(img_height)
-                        scaled_width = max_width
-                        scaled_height = max_width / aspect
-                        
-                        if scaled_height > max_height:
-                            scaled_height = max_height
-                            scaled_width = max_height * aspect
-                        
-                        # Get shape position if available
-                        left = shape.left.inches * inch if hasattr(shape, 'left') else None
-                        top = shape.top.inches * inch if hasattr(shape, 'top') else None
-                        
-                        # Save processed image with optimized quality
-                        output_image = io.BytesIO()
-                        
-                        # Determine best format based on image type
-                        if pil_image.mode in ['L', 'RGB']:
-                            save_format = 'JPEG'
-                            save_kwargs = {'quality': 95, 'optimize': True}
-                        else:
-                            save_format = 'PNG'
-                            save_kwargs = {'optimize': True}
-                        
-                        # Resize with high-quality resampling
-                        pil_image = pil_image.resize(
-                            (int(scaled_width), int(scaled_height)),
-                            Image.Resampling.LANCZOS
-                        )
-                        
-                        # Save with optimal format and compression
-                        pil_image.save(output_image, format=save_format, **save_kwargs)
-                        output_image.seek(0)
-                        
-                        # Create image element
-                        img = Image(output_image, width=scaled_width, height=scaled_height)
-                        
-                        # Position the image
-                        if left is not None and top is not None:
-                            # Use absolute positioning if we have position information
-                            img.drawHeight = scaled_height
-                            img.drawWidth = scaled_width
-                            img._offs_x = left
-                            img._offs_y = top
-                            story.append(img)
-                        else:
-                            # Center the image if we don't have position information
+                            image = shape.image
+                            image_bytes = image.blob
+                            
+                            # Create PIL Image for better handling
+                            pil_image = Image.open(io.BytesIO(image_bytes))
+                            
+                            # Convert RGBA to RGB if needed
+                            if pil_image.mode == 'RGBA':
+                                pil_image = pil_image.convert('RGB')
+                            
+                            # Get original dimensions
+                            img_width, img_height = pil_image.size
+                            
+                            # Get shape dimensions if available
+                            shape_width = shape.width.inches * inch if hasattr(shape, 'width') else None
+                            shape_height = shape.height.inches * inch if hasattr(shape, 'height') else None
+                            
+                            # Use shape dimensions if available, otherwise use defaults
+                            max_width = shape_width if shape_width else 8 * inch
+                            max_height = shape_height if shape_height else 6 * inch
+                            
+                            # Calculate dimensions while maintaining aspect ratio
+                            aspect = img_width / float(img_height)
+                            scaled_width = max_width
+                            scaled_height = max_width / aspect
+                            
+                            if scaled_height > max_height:
+                                scaled_height = max_height
+                                scaled_width = max_height * aspect
+                            
+                            # Save processed image with optimized quality
+                            output_image = io.BytesIO()
+                            
+                            # Determine best format based on image type
+                            if pil_image.mode in ['L', 'RGB']:
+                                save_format = 'JPEG'
+                                save_kwargs = {'quality': 95, 'optimize': True}
+                            else:
+                                save_format = 'PNG'
+                                save_kwargs = {'optimize': True}
+                            
+                            # Resize with high-quality resampling
+                            pil_image = pil_image.resize(
+                                (int(scaled_width), int(scaled_height)),
+                                Image.Resampling.LANCZOS
+                            )
+                            
+                            # Save with optimal format and compression
+                            pil_image.save(output_image, format=save_format, **save_kwargs)
+                            output_image.seek(0)
+                            
+                            # Create image element
+                            img_reader = ImageReader(output_image)
+                            img = RLImage(img_reader, width=scaled_width, height=scaled_height)
+                            
+                            # Center the image
                             story.append(Spacer(1, 12))
                             img_table = Table(
                                 [[img]], 
@@ -525,26 +395,150 @@ def ppt_to_pdf(uploaded_file):
                                 ]
                             )
                             story.append(img_table)
-                        story.append(Spacer(1, 12))
-                    except:
-                        pass
-                
-                if hasattr(shape, 'has_table') and shape.has_table:
-                    table_data = []
-                    for row in shape.table.rows:
-                        row_data = [cell.text for cell in row.cells]
-                        table_data.append(row_data)
+                            story.append(Spacer(1, 12))
+                        except Exception as e:
+                            print(f"Error processing image: {str(e)}")
+                            continue
+                        
+                    # Handle text frames
+                    elif hasattr(shape, 'text_frame'):
+                        text_frame = shape.text_frame
+                        if not hasattr(text_frame, 'paragraphs'):
+                            continue
+
+                        # Process paragraphs in the text frame
+                        for para_idx, paragraph in enumerate(text_frame.paragraphs):
+                            if not paragraph.text.strip():
+                                continue
+                            
+                            # Determine paragraph style and formatting
+                            current_style = None
+                            
+                            # Check if shape is a placeholder
+                            is_placeholder = hasattr(shape, 'placeholder_format')
+                            placeholder_type = shape.placeholder_format.type if is_placeholder else None
+                            
+                            # Determine style based on placeholder type and position
+                            if is_placeholder:
+                                if placeholder_type == 1:  # Title placeholder
+                                    current_style = ParagraphStyle(
+                                        'CustomTitle',
+                                        parent=title_style,
+                                        alignment=TA_CENTER
+                                    )
+                                elif placeholder_type == 2:  # Body placeholder
+                                    current_style = ParagraphStyle(
+                                        'CustomBody',
+                                        parent=body_style if not paragraph.level else bullet_style,
+                                        alignment=TA_LEFT
+                                    )
+                                elif placeholder_type == 3:  # Subtitle placeholder
+                                    current_style = ParagraphStyle(
+                                        'CustomSubtitle',
+                                        parent=subtitle_style,
+                                        alignment=TA_CENTER
+                                    )
+                                else:  # Other placeholder types
+                                    current_style = ParagraphStyle(
+                                        'CustomBody',
+                                        parent=body_style if not paragraph.level else bullet_style,
+                                        alignment=TA_LEFT
+                                    )
+                            else:  # Non-placeholder shapes with text
+                                current_style = ParagraphStyle(
+                                    'CustomBody',
+                                    parent=body_style if not paragraph.level else bullet_style,
+                                    alignment=TA_LEFT
+                                )
+                            
+                            # Handle bullet points with proper indentation
+                            if paragraph.level > 0:
+                                current_style.leftIndent = (paragraph.level * 20)
+                                current_style.bulletIndent = (paragraph.level * 20) - 10
+                                bullet_char = '•'  # Can be customized based on level
+                                current_style.bulletText = bullet_char
+                            
+                            # Apply text formatting with color and font size
+                            formatted_text = []
+                            for run in paragraph.runs:
+                                text = run.text
+                                format_tags = []
+                                
+                                # Handle text formatting
+                                if run.bold:
+                                    format_tags.append(('b', text))
+                                if run.italic:
+                                    format_tags.append(('i', text))
+                                if run.underline:
+                                    format_tags.append(('u', text))
+                                
+                                # Apply font color if available
+                                try:
+                                    if run.font.color.rgb:
+                                        color = f"#{run.font.color.rgb:06x}"
+                                        format_tags.append(('color', color))
+                                except:
+                                    pass
+                                
+                                # Apply font size if available
+                                try:
+                                    if run.font.size:
+                                        size = run.font.size.pt
+                                        current_style.fontSize = size
+                                except:
+                                    pass
+                                
+                                # Apply all formatting
+                                formatted = text
+                                for tag, value in format_tags:
+                                    if tag == 'color':
+                                        formatted = f'<font color="{value}">{formatted}</font>'
+                                    else:
+                                        formatted = f'<{tag}>{formatted}</{tag}>'
+                                
+                                formatted_text.append(formatted)
+                            
+                            para_text = "".join(formatted_text)
+                            
+                            # Handle paragraph alignment
+                            try:
+                                if hasattr(paragraph, 'alignment') and paragraph.alignment is not None:
+                                    # Map PowerPoint alignment to ReportLab alignment
+                                    alignment_map = {
+                                        0: TA_LEFT,      # Left
+                                        1: TA_CENTER,    # Center
+                                        2: TA_RIGHT,     # Right
+                                        3: TA_JUSTIFY    # Justify
+                                    }
+                                    current_style.alignment = alignment_map.get(paragraph.alignment, TA_LEFT)
+                            except:
+                                # Default to left alignment if there's an error
+                                current_style.alignment = TA_LEFT
+                            
+                            # Add the paragraph with proper style
+                            story.append(Paragraph(para_text, current_style))
                     
-                    if table_data:
-                        t = Table(table_data)
-                        t.setStyle(TableStyle([
-                            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-                            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                        ]))
-                        story.append(t)
-                        story.append(Spacer(1, 12))
+                    # Handle tables
+                    elif hasattr(shape, 'has_table') and shape.has_table:
+                        table_data = []
+                        for row in shape.table.rows:
+                            row_data = [cell.text for cell in row.cells]
+                            table_data.append(row_data)
+                        
+                        if table_data:
+                            t = Table(table_data)
+                            t.setStyle(TableStyle([
+                                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                            ]))
+                            story.append(t)
+                            story.append(Spacer(1, 12))
+                
+                except Exception as e:
+                    print(f"Error processing shape: {str(e)}")
+                    continue
             
             if i < len(prs.slides) - 1:
                 story.append(PageBreak())
