@@ -24,7 +24,7 @@ from reportlab.lib.utils import ImageReader
 
 # Set page configuration
 st.set_page_config(
-    page_title="Universal File Converter Pro",
+    page_title="Universal File Converter Pro1",
     page_icon="🔄",
     layout="wide"
 )
@@ -262,7 +262,10 @@ def ppt_to_pdf(uploaded_file):
         
         # Reset file pointer and load presentation
         uploaded_file.seek(0)
-        prs = Presentation(uploaded_file)
+        
+        # Save the uploaded file temporarily to ensure proper loading
+        temp_file = io.BytesIO(file_content)
+        prs = Presentation(temp_file)
         
         # Validate slide count
         if len(prs.slides) == 0:
@@ -343,7 +346,7 @@ def ppt_to_pdf(uploaded_file):
         )
         
         # Try to extract presentation title from metadata or first slide
-        presentation_title = "PowerPoint Presentation"
+        presentation_title = "Photography Studios"  # Default to the filename
         try:
             if hasattr(prs, 'core_properties') and prs.core_properties.title:
                 presentation_title = prs.core_properties.title
@@ -460,8 +463,10 @@ def ppt_to_pdf(uploaded_file):
                             pil_image.save(img_buffer, format='JPEG', quality=95)
                             img_buffer.seek(0)
                             
-                            # Create ReportLab image with proper alignment
+                            # Create ReportLab image with proper alignment and preserve formatting
                             rl_image = RLImage(img_buffer, width=width, height=height)
+                            # Center the image for better formatting
+                            rl_image.hAlign = 'CENTER'
                             story.append(rl_image)
                             story.append(Spacer(1, 16))
                             slide_has_content = True
