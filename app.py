@@ -268,80 +268,134 @@ def ppt_to_pdf(uploaded_file):
         if len(prs.slides) == 0:
             raise ValueError("The PowerPoint file appears to be empty. Please check the file.")
         
+        # Get presentation dimensions for better page sizing
+        try:
+            # Try to get slide dimensions from presentation
+            slide_width = prs.slide_width
+            slide_height = prs.slide_height
+            # Convert from EMU to inches (1 inch = 914400 EMU)
+            width_inches = slide_width / 914400
+            height_inches = slide_height / 914400
+            
+            # Create custom page size based on slide dimensions with some margins
+            custom_pagesize = (width_inches * inch, height_inches * inch)
+        except:
+            # Fallback to letter size if dimensions can't be determined
+            custom_pagesize = letter
+        
         output = io.BytesIO()
         pdf_doc = SimpleDocTemplate(
             output,
-            pagesize=letter,
-            leftMargin=0.75*inch,
-            rightMargin=0.75*inch,
-            topMargin=0.75*inch,
-            bottomMargin=0.75*inch
+            pagesize=custom_pagesize,
+            leftMargin=0.5*inch,
+            rightMargin=0.5*inch,
+            topMargin=0.5*inch,
+            bottomMargin=0.5*inch
         )
         styles = getSampleStyleSheet()
         story = []
         
-        # Create enhanced custom styles
+        # Create enhanced custom styles with better formatting
         slide_title_style = ParagraphStyle(
             'SlideTitle',
             parent=styles['Heading1'],
-            fontSize=18,
+            fontSize=20,
             spaceAfter=16,
             spaceBefore=8,
             alignment=TA_CENTER,
             textColor=colors.darkblue,
-            fontName='Helvetica-Bold'
+            fontName='Helvetica-Bold',
+            leading=24  # Improved line spacing
         )
         
         content_title_style = ParagraphStyle(
             'ContentTitle',
             parent=styles['Heading2'],
-            fontSize=14,
-            spaceAfter=8,
-            spaceBefore=6,
+            fontSize=16,
+            spaceAfter=10,
+            spaceBefore=8,
             alignment=TA_LEFT,
-            textColor=colors.darkgreen,
-            fontName='Helvetica-Bold'
+            textColor=colors.darkblue,
+            fontName='Helvetica-Bold',
+            leading=20  # Improved line spacing
         )
         
         content_style = ParagraphStyle(
             'SlideContent',
             parent=styles['Normal'],
-            fontSize=11,
-            spaceAfter=8,
-            spaceBefore=2,
+            fontSize=12,
+            spaceAfter=10,
+            spaceBefore=4,
             alignment=TA_LEFT,
-            leading=14,
+            leading=16,  # Improved line spacing
             fontName='Helvetica'
         )
         
         bullet_style = ParagraphStyle(
             'BulletStyle',
             parent=content_style,
-            leftIndent=24,
-            bulletIndent=12,
-            spaceAfter=6,
+            leftIndent=30,
+            bulletIndent=15,
+            spaceAfter=8,
             bulletFontName='Symbol',
-            bulletText='•'
+            bulletText='•',
+            leading=16  # Improved line spacing
         )
         
+        # Try to extract presentation title from metadata or first slide
+        presentation_title = "PowerPoint Presentation"
+        try:
+            if hasattr(prs, 'core_properties') and prs.core_properties.title:
+                presentation_title = prs.core_properties.title
+            elif prs.slides and hasattr(prs.slides[0], 'shapes'):
+                for shape in prs.slides[0].shapes:
+                    if hasattr(shape, 'text') and shape.text.strip() and len(shape.text) < 100:
+                        presentation_title = shape.text.strip()
+                        break
+        except:
+            pass
+        
         # Add presentation title
-        story.append(Paragraph("PowerPoint Presentation", slide_title_style))
+        story.append(Paragraph(presentation_title, slide_title_style))
         story.append(Spacer(1, 20))
         
         # Limit number of slides to prevent excessive processing
-        max_slides = 25  # Reasonable limit for most presentations
+        max_slides = 50  # Increased limit for better content coverage
         slides_to_process = list(prs.slides)[:max_slides]
         
         for i, slide in enumerate(slides_to_process):
             # Add slide header with better formatting
-            slide_header = f"━━━ Slide {i + 1} of {len(slides_to_process)} ━━━"
+            slide_header = f"Slide {i + 1} of {len(slides_to_process)}"
             story.append(Paragraph(slide_header, slide_title_style))
             story.append(Spacer(1, 16))
             
-            # Process slide content with limits
+            # Process slide content with increased limits
             shape_count = 0
-            max_shapes_per_slide = 20  # Increased limit for better content capture
+            max_shapes_per_slide = 30  # Increased limit for better content capture
             slide_has_content = False
+            
+            # Try to extract slide title first
+            slide_title = None
+            try:
+                # Look for title placeholder
+                for shape in slide.shapes:
+                    if hasattr(shape, 'is_placeholder') and shape.is_placeholder and shape.placeholder_format.idx == 0:
+                        if hasattr(shape, 'text') and shape.text.strip():
+                            slide_title = shape.text.strip()
+                            break
+                    # Fallback: look for any text that looks like a title
+                    elif hasattr(shape, 'text') and shape.text.strip() and len(shape.text) < 100:
+                        if shape.text.strip() not in slide_header:  # Avoid duplicating slide number
+                            slide_title = shape.text.strip()
+                            break
+            except:
+                pass
+            
+            # Add slide title if found
+            if slide_title:
+                story.append(Paragraph(slide_title, content_title_style))
+                story.append(Spacer(1, 12))
+                slide_has_content = True
             
             # Sort shapes by their position (top to bottom, left to right)
             try:
@@ -350,12 +404,16 @@ def ppt_to_pdf(uploaded_file):
                 sorted_shapes = slide.shapes
             
             for shape in sorted_shapes:
+                # Skip if this is the title we already processed
+                if slide_title and hasattr(shape, 'text') and shape.text.strip() == slide_title:
+                    continue
+                    
                 shape_count += 1
                 if shape_count > max_shapes_per_slide:
                     break
                 
                 try:
-                    # Handle images first
+                    # Handle images with improved quality
                     if hasattr(shape, 'shape_type') and shape.shape_type == 13:  # Picture type
                         try:
                             # Extract image from shape
@@ -365,23 +423,38 @@ def ppt_to_pdf(uploaded_file):
                             # Create PIL Image
                             pil_image = Image.open(io.BytesIO(image_bytes))
                             
-                            # Resize image if too large
-                            max_width, max_height = 400, 300
-                            pil_image.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
+                            # Calculate better image size based on PDF dimensions
+                            max_width = min(pdf_doc.width * 0.8, 500)  # 80% of page width or 500pt max
+                            max_height = min(pdf_doc.height * 0.6, 400)  # 60% of page height or 400pt max
+                            
+                            # Preserve aspect ratio
+                            width, height = pil_image.size
+                            aspect = width / height
+                            
+                            if width > max_width:
+                                width = max_width
+                                height = width / aspect
+                            
+                            if height > max_height:
+                                height = max_height
+                                width = height * aspect
+                            
+                            # Resize image with high quality
+                            pil_image.thumbnail((int(width), int(height)), Image.Resampling.LANCZOS)
                             
                             # Convert to RGB if necessary
                             if pil_image.mode in ('RGBA', 'LA', 'P'):
                                 pil_image = pil_image.convert('RGB')
                             
-                            # Save to BytesIO
+                            # Save to BytesIO with higher quality
                             img_buffer = io.BytesIO()
-                            pil_image.save(img_buffer, format='JPEG', quality=85)
+                            pil_image.save(img_buffer, format='JPEG', quality=95)
                             img_buffer.seek(0)
                             
-                            # Create ReportLab image
+                            # Create ReportLab image with proper alignment
                             rl_image = RLImage(img_buffer, width=pil_image.width, height=pil_image.height)
                             story.append(rl_image)
-                            story.append(Spacer(1, 12))
+                            story.append(Spacer(1, 16))
                             slide_has_content = True
                             
                         except Exception as img_error:
@@ -390,14 +463,17 @@ def ppt_to_pdf(uploaded_file):
                             story.append(Spacer(1, 8))
                             slide_has_content = True
                     
-                    # Handle text content
+                    # Handle text content with improved formatting
                     elif hasattr(shape, 'text') and shape.text.strip():
                         text = shape.text.strip()
-                        if len(text) > 1500:  # Increased text limit
-                            text = text[:1500] + "..."
+                        if len(text) > 2000:  # Increased text limit
+                            text = text[:2000] + "..."
+                        
+                        # Escape special characters for ReportLab
+                        text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
                         
                         # Determine text type and apply appropriate styling
-                        if len(text) < 80 and '\n' not in text:
+                        if len(text) < 100 and '\n' not in text:
                             # Likely a title or header
                             current_style = content_title_style
                         elif text.startswith(('•', '-', '*', '◦', '▪', '▫')):
@@ -407,27 +483,45 @@ def ppt_to_pdf(uploaded_file):
                         else:
                             current_style = content_style
                         
-                        story.append(Paragraph(text, current_style))
-                        story.append(Spacer(1, 6))
+                        # Handle multi-line text better
+                        paragraphs = text.split('\n')
+                        for para in paragraphs:
+                            if para.strip():
+                                story.append(Paragraph(para.strip(), current_style))
+                                story.append(Spacer(1, 4))
+                        
+                        story.append(Spacer(1, 8))
                         slide_has_content = True
                     
+                    # Enhanced text frame processing with better formatting
                     elif hasattr(shape, 'text_frame') and shape.text_frame:
-                        # Enhanced text frame processing
                         text_frame = shape.text_frame
                         if hasattr(text_frame, 'paragraphs'):
                             for paragraph in text_frame.paragraphs:
                                 if paragraph.text.strip():
                                     para_text = paragraph.text.strip()
-                                    if len(para_text) > 1200:
-                                        para_text = para_text[:1200] + "..."
+                                    if len(para_text) > 1500:
+                                        para_text = para_text[:1500] + "..."
                                     
-                                    # Enhanced bullet detection
-                                    if (para_text.startswith(('•', '-', '*', '◦', '▪', '▫')) or 
-                                        hasattr(paragraph, 'level') and paragraph.level > 0):
-                                        current_style = bullet_style
+                                    # Escape special characters for ReportLab
+                                    para_text = para_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                                    
+                                    # Enhanced bullet detection and formatting
+                                    level = getattr(paragraph, 'level', 0)
+                                    
+                                    if (para_text.startswith(('•', '-', '*', '◦', '▪', '▫')) or level > 0):
+                                        # Create custom bullet style based on level
+                                        level_style = ParagraphStyle(
+                                            f'BulletLevel{level}',
+                                            parent=bullet_style,
+                                            leftIndent=30 + (level * 15),
+                                            bulletIndent=15 + (level * 15)
+                                        )
+                                        current_style = level_style
+                                        
                                         if para_text.startswith(('•', '-', '*', '◦', '▪', '▫')):
                                             para_text = para_text[1:].strip()
-                                    elif len(para_text) < 80 and '\n' not in para_text:
+                                    elif len(para_text) < 100 and '\n' not in para_text:
                                         current_style = content_title_style
                                     else:
                                         current_style = content_style
@@ -436,41 +530,52 @@ def ppt_to_pdf(uploaded_file):
                                     story.append(Spacer(1, 4))
                                     slide_has_content = True
                     
+                    # Enhanced table handling with better formatting
                     elif hasattr(shape, 'table'):
-                        # Enhanced table handling
                         table = shape.table
                         table_data = []
                         
+                        # Process table data with better formatting
                         for row_idx, row in enumerate(table.rows):
                             row_data = []
                             for cell in row.cells:
                                 cell_text = cell.text.strip() if cell.text else ""
-                                if len(cell_text) > 150:
-                                    cell_text = cell_text[:150] + "..."
+                                if len(cell_text) > 200:  # Increased cell text limit
+                                    cell_text = cell_text[:200] + "..."
+                                
+                                # Escape special characters for ReportLab
+                                cell_text = cell_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
                                 row_data.append(cell_text)
+                            
                             table_data.append(row_data)
                         
                         if table_data and any(any(cell for cell in row) for row in table_data):
-                            # Create enhanced ReportLab table
-                            t = Table(table_data, repeatRows=1)
-                            t.setStyle(TableStyle([
-                                ('BACKGROUND', (0, 0), (-1, 0), colors.lightblue),
-                                ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
-                                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                                ('FONTSIZE', (0, 0), (-1, -1), 9),
-                                ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
-                                ('LEFTPADDING', (0, 0), (-1, -1), 6),
-                                ('RIGHTPADDING', (0, 0), (-1, -1), 6),
-                                ('TOPPADDING', (0, 0), (-1, -1), 4),
-                                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-                            ]))
-                            story.append(t)
-                            story.append(Spacer(1, 16))
-                            slide_has_content = True
+                            # Calculate better column widths
+                            col_count = len(table_data[0]) if table_data else 0
+                            if col_count > 0:
+                                available_width = pdf_doc.width * 0.9  # 90% of page width
+                                col_widths = [available_width / col_count] * col_count
+                                
+                                # Create enhanced ReportLab table with better styling
+                                t = Table(table_data, repeatRows=1, colWidths=col_widths)
+                                t.setStyle(TableStyle([
+                                    ('BACKGROUND', (0, 0), (-1, 0), colors.lightblue),
+                                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+                                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                                    ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                                    ('FONTSIZE', (0, 0), (-1, -1), 10),  # Increased font size
+                                    ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
+                                    ('LEFTPADDING', (0, 0), (-1, -1), 6),
+                                    ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                                    ('TOPPADDING', (0, 0), (-1, -1), 4),
+                                    ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                                ]))
+                                story.append(t)
+                                story.append(Spacer(1, 16))
+                                slide_has_content = True
                 
                 except Exception as shape_error:
                     # Skip problematic shapes but continue processing
@@ -487,8 +592,8 @@ def ppt_to_pdf(uploaded_file):
                 story.append(PageBreak())
         
         # Safety check: limit total story elements
-        if len(story) > 300:  # Increased limit for better content
-            story = story[:300]
+        if len(story) > 500:  # Increased limit for better content
+            story = story[:500]
             story.append(Paragraph("... (Content truncated for safety - presentation too large)", content_style))
         
         # Build PDF with enhanced error handling
@@ -498,20 +603,62 @@ def ppt_to_pdf(uploaded_file):
             # Enhanced fallback: create better formatted simple PDF
             st.warning("Complex layout failed, creating simplified PDF...")
             
+            # Use letter size for fallback
+            output = io.BytesIO()
+            pdf_doc = SimpleDocTemplate(
+                output,
+                pagesize=letter,
+                leftMargin=0.75*inch,
+                rightMargin=0.75*inch,
+                topMargin=0.75*inch,
+                bottomMargin=0.75*inch
+            )
+            
             simple_story = []
-            simple_story.append(Paragraph("PowerPoint Content (Simplified)", styles['Title']))
+            simple_story.append(Paragraph(presentation_title, styles['Title']))
             simple_story.append(Spacer(1, 20))
             
             # Extract all content with better formatting
-            for i, slide in enumerate(slides_to_process[:15]):  # Limit to 15 slides for fallback
+            for i, slide in enumerate(slides_to_process[:20]):  # Increased limit to 20 slides for fallback
                 simple_story.append(Paragraph(f"Slide {i + 1}", styles['Heading2']))
                 simple_story.append(Spacer(1, 12))
                 
+                # Try to extract slide title
+                slide_title = None
+                try:
+                    for shape in slide.shapes:
+                        if hasattr(shape, 'is_placeholder') and shape.is_placeholder and shape.placeholder_format.idx == 0:
+                            if hasattr(shape, 'text') and shape.text.strip():
+                                slide_title = shape.text.strip()
+                                break
+                except:
+                    pass
+                
+                # Add slide title if found
+                if slide_title:
+                    simple_story.append(Paragraph(slide_title, styles['Heading3']))
+                    simple_story.append(Spacer(1, 8))
+                
+                # Process shapes with better formatting
                 for shape in slide.shapes:
                     try:
+                        # Skip if this is the title we already processed
+                        if slide_title and hasattr(shape, 'text') and shape.text.strip() == slide_title:
+                            continue
+                            
                         if hasattr(shape, 'text') and shape.text.strip():
-                            text = shape.text.strip()[:800]  # Increased text length
-                            simple_story.append(Paragraph(text, styles['Normal']))
+                            text = shape.text.strip()[:1000]  # Increased text length
+                            
+                            # Escape special characters for ReportLab
+                            text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                            
+                            # Handle multi-line text better
+                            paragraphs = text.split('\n')
+                            for para in paragraphs:
+                                if para.strip():
+                                    simple_story.append(Paragraph(para.strip(), styles['Normal']))
+                                    simple_story.append(Spacer(1, 4))
+                            
                             simple_story.append(Spacer(1, 8))
                         elif hasattr(shape, 'shape_type') and shape.shape_type == 13:
                             simple_story.append(Paragraph("[Image present but not extracted in simplified mode]", styles['Normal']))
@@ -520,6 +667,10 @@ def ppt_to_pdf(uploaded_file):
                         continue
                 
                 simple_story.append(Spacer(1, 16))
+                
+                # Add page break between slides
+                if i < len(slides_to_process[:20]) - 1:
+                    simple_story.append(PageBreak())
             
             # Build simple version
             pdf_doc.build(simple_story)
