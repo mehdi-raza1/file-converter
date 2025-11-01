@@ -16,11 +16,13 @@ from pptx.util import Inches as PptxInches
 import openpyxl
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage, Table, TableStyle, PageBreak
+from reportlab.pdfgen import canvas as pdfcanvas
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT, TA_JUSTIFY
 from reportlab.lib.utils import ImageReader
+from xml.sax.saxutils import escape
 
 # Set page configuration
 st.set_page_config(
@@ -253,23 +255,415 @@ def excel_to_pdf(uploaded_file):
         return None
 
 def ppt_to_pdf(uploaded_file):
-    """Convert PowerPoint to PDF with enhanced formatting and image extraction"""
+    """Convert PowerPoint to PDF using a direct approach that preserves formatting"""
     try:
         # Validate file size
         file_content = uploaded_file.read()
         if len(file_content) > 50 * 1024 * 1024:  # 50MB limit
             raise ValueError("File size too large. Please upload a file smaller than 50MB.")
         
-        # Reset file pointer and load presentation
+        # Reset file pointer
         uploaded_file.seek(0)
         
-        # Save the uploaded file temporarily to ensure proper loading
-        temp_file = io.BytesIO(file_content)
-        prs = Presentation(temp_file)
+        # Create a temporary directory to work with the files
+        import tempfile
+        import os
+        import subprocess
+        import platform
+        from pathlib import Path
         
-        # Validate slide count
-        if len(prs.slides) == 0:
-            raise ValueError("The PowerPoint file appears to be empty. Please check the file.")
+        # Create a temporary directory
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Save the PowerPoint file to the temporary directory
+            temp_ppt_path = os.path.join(temp_dir, "presentation.pptx")
+            with open(temp_ppt_path, "wb") as f:
+                f.write(file_content)
+            
+            # Create output PDF path
+            temp_pdf_path = os.path.join(temp_dir, "output.pdf")
+            
+            # Try to use LibreOffice for conversion if available
+            try:
+                # Check if LibreOffice is installed
+                if platform.system() == "Windows":
+                    # Try common LibreOffice installation paths on Windows
+                    libreoffice_paths = [
+                        r"C:\Program Files\LibreOffice\program\soffice.exe",
+                        r"C:\Program Files (x86)\LibreOffice\program\soffice.exe"
+                    ]
+                    
+                    libreoffice_path = None
+                    for path in libreoffice_paths:
+                        if os.path.exists(path):
+                            libreoffice_path = path
+                            break
+                    
+                    if libreoffice_path:
+                        # Use LibreOffice to convert PPT to PDF
+                        cmd = [libreoffice_path, "--headless", "--convert-to", "pdf", "--outdir", temp_dir, temp_ppt_path]
+                        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        
+                        # Check if PDF was created
+                        pdf_path = os.path.join(temp_dir, "presentation.pdf")
+                        if os.path.exists(pdf_path):
+                            with open(pdf_path, "rb") as pdf_file:
+                                pdf_content = pdf_file.read()
+                                return pdf_content
+                
+                # If LibreOffice conversion failed or not available, try comtypes approach on Windows
+                if platform.system() == "Windows":
+                    try:
+                        import comtypes.client
+                        
+                        # Get absolute paths
+                        abs_ppt_path = os.path.abspath(temp_ppt_path)
+                        abs_pdf_path = os.path.abspath(temp_pdf_path)
+                        
+                        # Initialize PowerPoint application
+                        powerpoint = comtypes.client.CreateObject("Powerpoint.Application")
+                        powerpoint.Visible = False  # Run in background
+                        
+                        # Open the presentation
+                        presentation = powerpoint.Presentations.Open(abs_ppt_path)
+                        
+                        # Save as PDF with high quality
+                        # ppFixedFormatTypeXPS = 18, ppFixedFormatTypePDF = 17
+                        # Use PDF format with high quality settings
+                        fixedFormat = 17  # PDF format
+                        
+                        # Export with high quality settings
+                        presentation.ExportAsFixedFormat(
+                            abs_pdf_path,
+                            fixedFormat,
+                            PrintRange=1,  # All slides
+                            OutputType=0,  # Standard (not handouts)
+                            PrintHiddenSlides=False,
+                            FrameSlides=False,
+                            Intent=1,  # High quality
+                            KeepIRMSettings=True
+                        )
+                        
+                        # Close presentation and quit PowerPoint
+                        presentation.Close()
+                        powerpoint.Quit()
+                        
+                        # Force garbage collection to release COM objects
+                        del presentation
+                        del powerpoint
+                        import gc
+                        gc.collect()
+                        
+                        # Check if PDF was created
+                        if os.path.exists(abs_pdf_path):
+                            with open(abs_pdf_path, "rb") as pdf_file:
+                                pdf_content = pdf_file.read()
+                                return pdf_content
+                        
+                        raise Exception("PDF file not created by comtypes")
+                    except Exception as comtypes_error:
+                        st.warning(f"Windows COM conversion failed: {str(comtypes_error)}")
+                
+                # Try unoconv as another alternative
+                try:
+                    # Check if unoconv is installed
+                    subprocess.run(["unoconv", "--version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    
+                    # Use unoconv to convert PPT to PDF
+                    subprocess.run(["unoconv", "-f", "pdf", "-o", temp_dir, temp_ppt_path], check=True)
+                    
+                    # Check if PDF was created
+                    pdf_path = os.path.join(temp_dir, "presentation.pdf")
+                    if os.path.exists(pdf_path):
+                        with open(pdf_path, "rb") as pdf_file:
+                            pdf_content = pdf_file.read()
+                            return pdf_content
+                except:
+                    # If all direct conversion methods failed, fall back to alternative method
+                    pass
+                
+                raise Exception("All direct conversion methods failed")
+                
+            except Exception as e:
+                # Fall back to python-pptx and reportlab approach with improved formatting
+                st.warning("Using fallback conversion method. Some formatting may be affected.")
+                
+                # Load presentation
+                prs = Presentation(temp_ppt_path)
+                
+                # Validate slide count
+                if len(prs.slides) == 0:
+                    raise ValueError("The PowerPoint file appears to be empty. Please check the file.")
+
+                # High-fidelity fallback: absolute positioning with canvas to preserve layout
+                try:
+                    st.info("Using high-fidelity renderer (absolute positioning).")
+
+                    # Utility: EMU to points
+                    def emu_to_pt(val):
+                        try:
+                            return float(val) * 72.0 / 914400.0
+                        except Exception:
+                            return 0.0
+
+                    page_width_pt = emu_to_pt(prs.slide_width)
+                    page_height_pt = emu_to_pt(prs.slide_height)
+
+                    output = io.BytesIO()
+                    c = pdfcanvas.Canvas(output, pagesize=(page_width_pt, page_height_pt))
+
+                    # Helper to draw background (try picture from slide/master, else solid color)
+                    def draw_slide_background(slide):
+                        # Try picture background via XML relationship
+                        try:
+                            from pptx.oxml.ns import qn
+                            bg = slide._element.cSld.bg
+                            if bg is not None and getattr(bg, 'bgPr', None) is not None:
+                                bgPr = bg.bgPr
+                                blipFill = getattr(bgPr, 'blipFill', None)
+                                if blipFill is not None and getattr(blipFill, 'blip', None) is not None:
+                                    blip = blipFill.blip
+                                    rId = blip.get(qn('r:embed'))
+                                    if rId:
+                                        part = slide.part.related_parts.get(rId)
+                                        if part is not None:
+                                            pil_img = Image.open(io.BytesIO(part.blob))
+                                            c.drawImage(ImageReader(pil_img), 0, 0, width=page_width_pt, height=page_height_pt)
+                                            return
+                        except Exception:
+                            pass
+
+                        # Try layout/master pictures (common in templates)
+                        try:
+                            # Slide Layout backgrounds/pictures
+                            layout = getattr(slide, 'slide_layout', None)
+                            if layout is not None:
+                                for shp in getattr(layout, 'shapes', []):
+                                    try:
+                                        if hasattr(shp, 'image') and shp.image is not None:
+                                            pil_img = Image.open(io.BytesIO(shp.image.blob))
+                                            # Draw stretched as background (layout images often intended as full-bleed)
+                                            c.drawImage(ImageReader(pil_img), 0, 0, width=page_width_pt, height=page_height_pt)
+                                            return
+                                    except Exception:
+                                        continue
+                            # Slide Master pictures
+                            master = getattr(slide, 'slide_layout', None)
+                            master = getattr(master, 'slide_master', None) if master else None
+                            if master is not None:
+                                for shp in getattr(master, 'shapes', []):
+                                    try:
+                                        if hasattr(shp, 'image') and shp.image is not None:
+                                            pil_img = Image.open(io.BytesIO(shp.image.blob))
+                                            c.drawImage(ImageReader(pil_img), 0, 0, width=page_width_pt, height=page_height_pt)
+                                            return
+                                    except Exception:
+                                        continue
+                        except Exception:
+                            pass
+
+                        # Fallback to solid fill color
+                        try:
+                            fill = slide.background.fill
+                            if fill and hasattr(fill, 'foreground_color') and fill.fore_color and hasattr(fill.fore_color, 'rgb') and fill.fore_color.rgb:
+                                rgb = fill.fore_color.rgb
+                                r = rgb[0] / 255.0
+                                g = rgb[1] / 255.0
+                                b = rgb[2] / 255.0
+                                c.setFillColor(colors.Color(r, g, b))
+                                c.rect(0, 0, page_width_pt, page_height_pt, stroke=0, fill=1)
+                            else:
+                                # Default white
+                                c.setFillColor(colors.white)
+                                c.rect(0, 0, page_width_pt, page_height_pt, stroke=0, fill=1)
+                        except Exception:
+                            c.setFillColor(colors.white)
+                            c.rect(0, 0, page_width_pt, page_height_pt, stroke=0, fill=1)
+
+                    # Iterate slides and draw shapes with absolute positions
+                    for slide in prs.slides:
+                        draw_slide_background(slide)
+
+                        for shape in slide.shapes:
+                            try:
+                                x_pt = emu_to_pt(getattr(shape, 'left', 0))
+                                y_pt_top = emu_to_pt(getattr(shape, 'top', 0))
+                                w_pt = emu_to_pt(getattr(shape, 'width', 0))
+                                h_pt = emu_to_pt(getattr(shape, 'height', 0))
+                                bottom_y = page_height_pt - y_pt_top - h_pt
+
+                                # Draw pictures
+                                if hasattr(shape, 'image') and shape.image is not None:
+                                    try:
+                                        img_blob = shape.image.blob
+                                        img_stream = io.BytesIO(img_blob)
+                                        pil_img = Image.open(img_stream)
+                                        img_w, img_h = pil_img.size
+                                        if img_w == 0 or img_h == 0:
+                                            continue
+                                        # Scale to fit bounding box preserving aspect ratio and center
+                                        scale = min(w_pt / img_w, h_pt / img_h) if w_pt > 0 and h_pt > 0 else 1.0
+                                        draw_w = img_w * scale
+                                        draw_h = img_h * scale
+                                        draw_x = x_pt + max(0, (w_pt - draw_w) / 2.0)
+                                        draw_y = bottom_y + max(0, (h_pt - draw_h) / 2.0)
+                                        c.drawImage(ImageReader(pil_img), draw_x, draw_y, width=draw_w, height=draw_h, preserveAspectRatio=True, mask='auto')
+                                    except Exception:
+                                        continue
+
+                                # Draw text frames
+                                elif getattr(shape, 'has_text_frame', False):
+                                    try:
+                                        tf = shape.text_frame
+                                        from pptx.enum.text import PP_ALIGN
+                                        # Vertical anchor
+                                        try:
+                                            from pptx.enum.text import MSO_ANCHOR
+                                            v_anchor = getattr(tf, 'vertical_anchor', getattr(MSO_ANCHOR, 'TOP', None))
+                                        except Exception:
+                                            v_anchor = None
+
+                                        # Build paragraphs preserving runs and formatting
+                                        paras = []
+                                        max_font_size = 12
+                                        default_font_name = 'Helvetica'
+                                        for p in tf.paragraphs:
+                                            runs_html = []
+                                            run_font_size = None
+                                            run_font_name = None
+                                            for r in getattr(p, 'runs', []) or []:
+                                                txt = escape(getattr(r, 'text', '') or '')
+                                                font = r.font
+                                                size_pt = None
+                                                name = None
+                                                color_hex = None
+                                                try:
+                                                    if getattr(font, 'size', None):
+                                                        size_pt = int(getattr(font.size, 'pt', 0)) or None
+                                                        run_font_size = max(run_font_size or 0, size_pt or 0)
+                                                        max_font_size = max(max_font_size, size_pt or max_font_size)
+                                                    name = getattr(font, 'name', None)
+                                                    if name and not run_font_name:
+                                                        run_font_name = name
+                                                    fc = getattr(font, 'color', None)
+                                                    if fc is not None and getattr(fc, 'rgb', None):
+                                                        rgb = fc.rgb
+                                                        color_hex = '#%02x%02x%02x' % (rgb[0], rgb[1], rgb[2])
+                                                except Exception:
+                                                    pass
+                                                open_tags = ''
+                                                close_tags = ''
+                                                if getattr(font, 'bold', False):
+                                                    open_tags += '<b>'
+                                                    close_tags = '</b>' + close_tags
+                                                if getattr(font, 'italic', False):
+                                                    open_tags += '<i>'
+                                                    close_tags = '</i>' + close_tags
+                                                if getattr(font, 'underline', False):
+                                                    open_tags += '<u>'
+                                                    close_tags = '</u>' + close_tags
+                                                font_attrs = []
+                                                if name:
+                                                    font_attrs.append(f'name="{name}"')
+                                                if size_pt:
+                                                    font_attrs.append(f'size="{size_pt}"')
+                                                if color_hex:
+                                                    font_attrs.append(f'color="{color_hex}"')
+                                                if font_attrs:
+                                                    runs_html.append(f'<font {" ".join(font_attrs)}>{open_tags}{txt}{close_tags}</font>')
+                                                else:
+                                                    runs_html.append(f'{open_tags}{txt}{close_tags}')
+                                            para_text = ''.join(runs_html) if runs_html else escape(getattr(p, 'text', '') or '')
+                                            # Bullet support
+                                            bullet_text = None
+                                            level = getattr(p, 'level', 0) or 0
+                                            if getattr(p, 'bullet', None) or level > 0:
+                                                bullet_text = '•'
+                                            # Alignment per paragraph
+                                            align_map = {
+                                                getattr(PP_ALIGN, 'LEFT', None): TA_LEFT,
+                                                getattr(PP_ALIGN, 'CENTER', None): TA_CENTER,
+                                                getattr(PP_ALIGN, 'RIGHT', None): TA_RIGHT,
+                                                getattr(PP_ALIGN, 'JUSTIFY', None): TA_JUSTIFY,
+                                            }
+                                            p_align = align_map.get(getattr(p, 'alignment', None), TA_LEFT)
+                                            # Style per paragraph
+                                            left_indent = 18 * level  # points
+                                            bullet_indent = max(0, left_indent - 12)
+                                            # Line spacing from PPT if available
+                                            try:
+                                                line_spacing = getattr(p, 'line_spacing', None)
+                                                leading = float(getattr(line_spacing, 'pt', 0)) if line_spacing else (run_font_size or max_font_size) * 1.2
+                                            except Exception:
+                                                leading = (run_font_size or max_font_size) * 1.2
+                                            style = ParagraphStyle(
+                                                name='ShapeText',
+                                                fontName=(run_font_name or default_font_name),
+                                                fontSize=(run_font_size or max_font_size),
+                                                leading=leading,
+                                                alignment=p_align,
+                                                leftIndent=left_indent,
+                                                bulletIndent=bullet_indent
+                                            )
+                                            paras.append((para_text, style, bullet_text))
+
+                                        # Measure total height
+                                        heights = []
+                                        wrapped = []
+                                        for txt, style, bullet in paras:
+                                            para = Paragraph(txt, style, bulletText=bullet)
+                                            wrap_w, wrap_h = para.wrap(w_pt, h_pt)
+                                            heights.append(wrap_h)
+                                            wrapped.append(para)
+                                        total_h = sum(heights)
+                                        # Determine vertical anchor
+                                        anchor = getattr(tf, 'vertical_anchor', None)
+                                        anchor_name = getattr(anchor, 'name', str(anchor)) if anchor is not None else ''
+                                        if 'MIDDLE' in str(anchor_name):
+                                            base_y = bottom_y + max(0, (h_pt - total_h)/2.0)
+                                        elif 'BOTTOM' in str(anchor_name):
+                                            base_y = bottom_y
+                                        else:
+                                            base_y = bottom_y + max(0, (h_pt - total_h))
+                                        # Draw each paragraph stacked
+                                        y_cursor = base_y
+                                        for para, h in zip(wrapped, heights):
+                                            para.drawOn(c, x_pt, y_cursor)
+                                            y_cursor += h
+                                    except Exception:
+                                        continue
+
+                                # Draw tables (approximate)
+                                elif getattr(shape, 'has_table', False):
+                                    try:
+                                        data = []
+                                        tbl = shape.table
+                                        for row in tbl.rows:
+                                            data.append([cell.text for cell in row.cells])
+                                        # Calculate column widths evenly
+                                        col_count = len(data[0]) if data else 0
+                                        col_widths = [w_pt / max(col_count, 1)] * max(col_count, 1)
+                                        t = Table(data, colWidths=col_widths)
+                                        t.setStyle(TableStyle([
+                                            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+                                            ('FONT', (0,0), (-1,-1), 'Helvetica', 12),
+                                            ('VALIGN', (0,0), (-1,-1), 'MIDDLE')
+                                        ]))
+                                        tw, th = t.wrap(w_pt, h_pt)
+                                        t.drawOn(c, x_pt, bottom_y + max(0, (h_pt - th)))
+                                    except Exception:
+                                        continue
+                            except Exception:
+                                # Skip problematic shapes
+                                continue
+
+                        c.showPage()
+
+                    c.save()
+                    output.seek(0)
+                    return output
+                except Exception as render_err:
+                    # If high-fidelity rendering fails, continue with existing simple story builder below
+                    st.warning(f"High-fidelity renderer fallback failed: {render_err}")
         
         # Get presentation dimensions for better page sizing
         try:
