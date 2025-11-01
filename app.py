@@ -421,7 +421,8 @@ def ppt_to_pdf(uploaded_file):
                             image_bytes = image.blob
                             
                             # Create PIL Image
-                            pil_image = Image.open(io.BytesIO(image_bytes))
+                            img_buffer = io.BytesIO(image_bytes)
+                            pil_image = Image.open(img_buffer)
                             
                             # Calculate better image size based on PDF dimensions
                             max_width = min(pdf_doc.width * 0.8, 500)  # 80% of page width or 500pt max
@@ -429,7 +430,7 @@ def ppt_to_pdf(uploaded_file):
                             
                             # Preserve aspect ratio
                             width, height = pil_image.size
-                            aspect = width / height
+                            aspect = width / height if height > 0 else 1
                             
                             if width > max_width:
                                 width = max_width
@@ -439,8 +440,16 @@ def ppt_to_pdf(uploaded_file):
                                 height = max_height
                                 width = height * aspect
                             
+                            # Ensure dimensions are valid
+                            width = max(1, int(width))
+                            height = max(1, int(height))
+                            
                             # Resize image with high quality
-                            pil_image.thumbnail((int(width), int(height)), Image.Resampling.LANCZOS)
+                            try:
+                                pil_image = pil_image.resize((width, height), Image.Resampling.LANCZOS)
+                            except:
+                                # Fallback to BICUBIC if LANCZOS fails
+                                pil_image = pil_image.resize((width, height), Image.BICUBIC)
                             
                             # Convert to RGB if necessary
                             if pil_image.mode in ('RGBA', 'LA', 'P'):
@@ -452,7 +461,7 @@ def ppt_to_pdf(uploaded_file):
                             img_buffer.seek(0)
                             
                             # Create ReportLab image with proper alignment
-                            rl_image = RLImage(img_buffer, width=pil_image.width, height=pil_image.height)
+                            rl_image = RLImage(img_buffer, width=width, height=height)
                             story.append(rl_image)
                             story.append(Spacer(1, 16))
                             slide_has_content = True
@@ -603,8 +612,11 @@ def ppt_to_pdf(uploaded_file):
             # Enhanced fallback: create better formatted simple PDF
             st.warning("Complex layout failed, creating simplified PDF...")
             
+            # Reset output buffer
+            output.seek(0)
+            output.truncate(0)
+            
             # Use letter size for fallback
-            output = io.BytesIO()
             pdf_doc = SimpleDocTemplate(
                 output,
                 pagesize=letter,
