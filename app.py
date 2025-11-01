@@ -24,7 +24,7 @@ from reportlab.lib.utils import ImageReader
 
 # Set page configuration
 st.set_page_config(
-    page_title="Universal File Converter Proooo",
+    page_title="Universal File Converter Pro",
     page_icon="🔄",
     layout="wide"
 )
