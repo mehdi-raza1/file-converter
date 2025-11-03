@@ -1,0 +1,15 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.git/
+.gitignore
+README.md
+.env
+.vscode/
+.idea/
+*.log
+test_install.bat
+install_dependencies.py
+run_app.bat

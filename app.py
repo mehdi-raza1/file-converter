@@ -8,7 +8,7 @@ import json
 import zipfile
 from docx import Document
 from docx.shared import Inches
-import PyPDF2
+import fitz  # PyMuPDF - Better PDF processing
 from pdf2image import convert_from_bytes
 import img2pdf
 from pptx import Presentation
@@ -23,17 +23,81 @@ from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT, TA_JUSTIFY
 from reportlab.lib.utils import ImageReader
 from xml.sax.saxutils import escape
+import logging
+import traceback
+import tempfile
+import os
+import sys
+
+# Configure logging for production
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('converter.log'),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # Set page configuration
 st.set_page_config(
-    page_title="Universal File Converter Pro1",
+    page_title="Universal File Converter Pro",
     page_icon="🔄",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# Custom CSS
+# Production-ready error handling decorator
+def handle_conversion_errors(func):
+    """Decorator for handling conversion errors gracefully"""
+    def wrapper(*args, **kwargs):
+        try:
+            logger.info(f"Starting conversion: {func.__name__}")
+            result = func(*args, **kwargs)
+            if result:
+                logger.info(f"Conversion successful: {func.__name__}")
+            else:
+                logger.warning(f"Conversion returned None: {func.__name__}")
+            return result
+        except Exception as e:
+            logger.error(f"Error in {func.__name__}: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            st.error(f"Conversion failed: {str(e)}")
+            return None
+    return wrapper
+
+# File size validation
+def validate_file_size(uploaded_file, max_size_mb=50):
+    """Validate file size before processing"""
+    if uploaded_file is None:
+        return False
+    
+    file_size = len(uploaded_file.getvalue())
+    max_size_bytes = max_size_mb * 1024 * 1024
+    
+    if file_size > max_size_bytes:
+        st.error(f"File size ({file_size / (1024*1024):.1f} MB) exceeds maximum allowed size ({max_size_mb} MB)")
+        return False
+    return True
+
+# Memory management helper
+def clear_memory():
+    """Clear memory after heavy operations"""
+    import gc
+    gc.collect()
+
+# Custom CSS with improved styling
 st.markdown("""
 <style>
+    .main-header {
+        text-align: center;
+        padding: 2rem 0;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border-radius: 10px;
+        margin-bottom: 2rem;
+    }
     .conversion-card {
         padding: 20px;
         border-radius: 10px;
@@ -41,21 +105,51 @@ st.markdown("""
         color: white;
         text-align: center;
         margin: 10px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     }
     .stButton>button {
         width: 100%;
         background-color: #4CAF50;
         color: white;
-        padding: 10px;
+        padding: 12px;
         font-size: 16px;
+        border-radius: 8px;
+        border: none;
+        transition: all 0.3s ease;
+    }
+    .stButton>button:hover {
+        background-color: #45a049;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    }
+    .success-message {
+        padding: 1rem;
+        background-color: #d4edda;
+        border: 1px solid #c3e6cb;
         border-radius: 5px;
+        color: #155724;
+        margin: 1rem 0;
+    }
+    .error-message {
+        padding: 1rem;
+        background-color: #f8d7da;
+        border: 1px solid #f5c6cb;
+        border-radius: 5px;
+        color: #721c24;
+        margin: 1rem 0;
+    }
+    .info-box {
+        padding: 1rem;
+        background-color: #e3f2fd;
+        border-left: 4px solid #2196f3;
+        margin: 1rem 0;
+        border-radius: 4px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Title
-st.title("🔄 Universal File Converter Pro")
-st.markdown("### Convert any file format with ease!")
+# Title with improved styling
+st.markdown('<div class="main-header"><h1>🔄 Universal File Converter Pro</h1><p>Convert any file format with ease - Production Ready</p></div>', unsafe_allow_html=True)
 
 # Conversion categories
 conversion_categories = {
@@ -112,11 +206,13 @@ conversion_type = st.sidebar.selectbox("Conversion", conversion_categories[categ
 
 # Helper Functions
 
+@handle_conversion_errors
 def word_to_pdf(uploaded_file):
-    """Convert Word to PDF with formatting preserved"""
+    """Convert Word to PDF with enhanced error handling and formatting preservation"""
+    if not validate_file_size(uploaded_file, 25):  # 25MB limit for Word files
+        return None
+    
     try:
-        from docx import Document
-        
         doc = Document(uploaded_file)
         
         output = io.BytesIO()
@@ -127,92 +223,114 @@ def word_to_pdf(uploaded_file):
         styles = getSampleStyleSheet()
         story = []
         
-        # Create custom styles
+        # Create enhanced custom styles
         for i in range(1, 10):
             style_name = f'Heading{i}'
             if style_name not in styles:
                 styles.add(ParagraphStyle(
                     name=style_name,
                     parent=styles['Heading1'],
-                    fontSize=20 - (i * 2),
+                    fontSize=max(12, 20 - (i * 2)),
                     spaceAfter=12,
-                    spaceBefore=12
+                    spaceBefore=12,
+                    textColor=colors.darkblue
                 ))
         
-        # Process paragraphs
+        # Process paragraphs with enhanced error handling
         for para in doc.paragraphs:
             if not para.text.strip():
                 story.append(Spacer(1, 6))
                 continue
             
             style = styles['Normal']
-            if para.style.name.startswith('Heading'):
+            
+            # Enhanced paragraph style detection with proper null checks
+            if para.style and hasattr(para.style, 'name') and para.style.name and para.style.name.startswith('Heading'):
                 try:
                     level = para.style.name.replace('Heading', '').strip()
-                    if level.isdigit():
+                    if level.isdigit() and int(level) <= 9:
                         style = styles[f'Heading{level}']
                     else:
                         style = styles['Heading1']
-                except:
+                except (ValueError, KeyError, AttributeError):
                     style = styles['Heading1']
-            elif 'Title' in para.style.name:
+            elif para.style and hasattr(para.style, 'name') and para.style.name and 'Title' in para.style.name:
                 style = styles['Title']
             
-            text = para.text
-            p = Paragraph(text, style)
-            story.append(p)
-            story.append(Spacer(1, 6))
+            # Escape special characters and limit text length
+            text = escape(para.text[:2000])  # Limit text length
+            if text.strip():
+                p = Paragraph(text, style)
+                story.append(p)
+                story.append(Spacer(1, 6))
         
-        # Process tables
+        # Process tables with enhanced formatting
         for table in doc.tables:
-            data = []
-            for row in table.rows:
-                row_data = [cell.text for cell in row.cells]
-                data.append(row_data)
-            
-            if data:
-                t = Table(data)
-                t.setStyle(TableStyle([
-                    ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                    ('GRID', (0, 0), (-1, -1), 1, colors.black)
-                ]))
-                story.append(t)
-                story.append(Spacer(1, 12))
+            try:
+                data = []
+                for row in table.rows:
+                    row_data = []
+                    for cell in row.cells:
+                        cell_text = escape(cell.text[:500])  # Limit cell text
+                        row_data.append(cell_text)
+                    data.append(row_data)
+                
+                if data and any(any(cell.strip() for cell in row) for row in data):
+                    # Calculate column widths
+                    col_count = len(data[0]) if data else 1
+                    available_width = pdf_doc.width * 0.9
+                    col_widths = [available_width / col_count] * col_count
+                    
+                    t = Table(data, colWidths=col_widths, repeatRows=1)
+                    t.setStyle(TableStyle([
+                        ('BACKGROUND', (0, 0), (-1, 0), colors.lightblue),
+                        ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+                        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                        ('FONTSIZE', (0, 0), (-1, -1), 10),
+                        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+                        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                    ]))
+                    story.append(t)
+                    story.append(Spacer(1, 12))
+            except Exception as table_error:
+                logger.warning(f"Table processing error: {table_error}")
+                continue
         
-        # Safety check: limit total story elements to prevent infinite pages
-        if len(story) > 500:  # Limit total elements
-            story = story[:500]
-            story.append(Paragraph("... (Content truncated for safety)", styles['Normal']))
+        # Safety check for story length
+        if len(story) > 1000:
+            story = story[:1000]
+            story.append(Paragraph("... (Content truncated for performance)", styles['Normal']))
         
+        # Build PDF with fallback
         try:
             pdf_doc.build(story)
-        except Exception as layout_error:
-            # Fallback: create simple text-only PDF
-            st.warning("Complex layout failed, creating simplified text-only PDF...")
+        except Exception as build_error:
+            logger.warning(f"Complex layout failed: {build_error}")
+            # Create simplified version
+            simple_story = [
+                Paragraph("Document Content", styles['Title']),
+                Spacer(1, 20)
+            ]
             
-            # Extract all text content from Word document
-            simple_story = []
-            simple_story.append(Paragraph("Document Content", styles['Heading1']))
-            simple_story.append(Spacer(1, 12))
-            
-            for para in doc.paragraphs:
+            for para in doc.paragraphs[:50]:  # Limit paragraphs
                 if para.text.strip():
-                    # Simple text extraction only
-                    text = para.text.strip()[:500]  # Limit text length
+                    text = escape(para.text.strip()[:1000])
                     simple_story.append(Paragraph(text, styles['Normal']))
-                    simple_story.append(Spacer(1, 6))
+                    simple_story.append(Spacer(1, 8))
             
-            # Build simple version
-            pdf_doc.build(simple_story[:30])  # Very limited content
+            pdf_doc.build(simple_story)
         
         output.seek(0)
+        clear_memory()
         return output
+        
     except Exception as e:
-        st.error(f"Error: {str(e)}")
-        return None
+        logger.error(f"Word to PDF conversion error: {str(e)}")
+        raise e
 
 def excel_to_pdf(uploaded_file):
     """Convert Excel to PDF"""
@@ -1133,114 +1251,200 @@ def text_to_pdf(text_content):
         st.error(f"Error: {str(e)}")
         return None
 
+@handle_conversion_errors
 def pdf_to_word(uploaded_file):
-    """Convert PDF to Word"""
+    """Convert PDF to Word using PyMuPDF for better text extraction"""
+    if not validate_file_size(uploaded_file):
+        return None
+    
     try:
-        pdf_reader = PyPDF2.PdfReader(uploaded_file)
+        # Read PDF with PyMuPDF
+        pdf_document = fitz.open(stream=uploaded_file.read(), filetype="pdf")
         doc = Document()
         
-        for page in pdf_reader.pages:
-            text = page.extract_text()
-            doc.add_paragraph(text)
+        # Add document title
+        doc.add_heading('PDF Content', 0)
+        
+        for page_num in range(len(pdf_document)):
+            page = pdf_document.load_page(page_num)
+            
+            # Extract text with better formatting
+            text = page.get_text("text")
+            
+            if text.strip():
+                # Add page header
+                doc.add_heading(f'Page {page_num + 1}', level=1)
+                
+                # Split text into paragraphs
+                paragraphs = text.split('\n\n')
+                for para in paragraphs:
+                    if para.strip():
+                        doc.add_paragraph(para.strip())
+            
+            # Extract images from page
+            try:
+                image_list = page.get_images()
+                for img_index, img in enumerate(image_list):
+                    xref = img[0]
+                    pix = fitz.Pixmap(pdf_document, xref)
+                    
+                    if pix.n - pix.alpha < 4:  # GRAY or RGB
+                        img_data = pix.tobytes("png")
+                        
+                        # Save image to temporary file
+                        with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp_file:
+                            tmp_file.write(img_data)
+                            tmp_file.flush()
+                            
+                            # Add image to document
+                            try:
+                                doc.add_picture(tmp_file.name, width=Inches(4))
+                            except:
+                                pass  # Skip if image can't be added
+                            finally:
+                                os.unlink(tmp_file.name)
+                    
+                    pix = None  # Release memory
+            except Exception as img_error:
+                logger.warning(f"Image extraction error on page {page_num}: {img_error}")
+        
+        pdf_document.close()
         
         output = io.BytesIO()
         doc.save(output)
         output.seek(0)
+        clear_memory()
         return output
+        
     except Exception as e:
-        st.error(f"Error: {str(e)}")
-        return None
+        logger.error(f"PDF to Word conversion error: {str(e)}")
+        raise e
 
+@handle_conversion_errors
 def pdf_to_excel(uploaded_file):
-    """Convert PDF to Excel"""
-    try:
-        pdf_reader = PyPDF2.PdfReader(uploaded_file)
-        data = []
-        
-        for page in pdf_reader.pages:
-            text = page.extract_text()
-            lines = text.split('\n')
-            for line in lines:
-                if line.strip():
-                    data.append([line.strip()])
-        
-        df = pd.DataFrame(data, columns=['Content'])
-        output = io.BytesIO()
-        df.to_excel(output, index=False, engine='openpyxl')
-        output.seek(0)
-        return output
-    except Exception as e:
-        st.error(f"Error: {str(e)}")
+    """Convert PDF to Excel using PyMuPDF"""
+    if not validate_file_size(uploaded_file):
         return None
-
-def pdf_to_ppt(uploaded_file):
-    """Convert PDF to PowerPoint"""
+    
     try:
-        pdf_reader = PyPDF2.PdfReader(uploaded_file)
-        prs = Presentation()
+        pdf_document = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+        all_data = []
         
-        for page_num, page in enumerate(pdf_reader.pages):
-            text = page.extract_text()
-            slide = prs.slides.add_slide(prs.slide_layouts[1])
-            title = slide.shapes.title
-            title.text = f"Page {page_num + 1}"
+        for page_num in range(len(pdf_document)):
+            page = pdf_document.load_page(page_num)
             
-            body = slide.placeholders[1]
-            tf = body.text_frame
-            tf.text = text
+            # Try to extract tables first
+            try:
+                tables = page.find_tables()
+                if tables:
+                    for table in tables:
+                        table_data = table.extract()
+                        for row in table_data:
+                            all_data.append([f"Page {page_num + 1} - Table"] + list(row))
+                        all_data.append([])  # Empty row between tables
+                else:
+                    # Extract text and split into rows
+                    text = page.get_text("text")
+                    lines = text.split('\n')
+                    for line in lines:
+                        if line.strip():
+                            all_data.append([f"Page {page_num + 1}", line.strip()])
+            except:
+                # Fallback to text extraction
+                text = page.get_text("text")
+                lines = text.split('\n')
+                for line in lines:
+                    if line.strip():
+                        all_data.append([f"Page {page_num + 1}", line.strip()])
         
+        pdf_document.close()
+        
+        if not all_data:
+            all_data = [["No content found"]]
+        
+        df = pd.DataFrame(all_data)
         output = io.BytesIO()
-        prs.save(output)
+        df.to_excel(output, index=False, header=False, engine='openpyxl')
         output.seek(0)
+        clear_memory()
         return output
+        
     except Exception as e:
-        st.error(f"Error: {str(e)}")
-        return None
+        logger.error(f"PDF to Excel conversion error: {str(e)}")
+        raise e
 
+@handle_conversion_errors
 def pdf_to_text(uploaded_file):
-    """Convert PDF to Text"""
-    try:
-        pdf_reader = PyPDF2.PdfReader(uploaded_file)
-        text = ""
-        
-        for page in pdf_reader.pages:
-            text += page.extract_text() + "\n\n"
-        
-        return text
-    except Exception as e:
-        st.error(f"Error: {str(e)}")
+    """Convert PDF to Text using PyMuPDF"""
+    if not validate_file_size(uploaded_file):
         return None
+    
+    try:
+        pdf_document = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+        text_content = ""
+        
+        for page_num in range(len(pdf_document)):
+            page = pdf_document.load_page(page_num)
+            text = page.get_text("text")
+            
+            if text.strip():
+                text_content += f"\n--- Page {page_num + 1} ---\n"
+                text_content += text + "\n\n"
+        
+        pdf_document.close()
+        clear_memory()
+        return text_content if text_content.strip() else "No text content found in PDF"
+        
+    except Exception as e:
+        logger.error(f"PDF to Text conversion error: {str(e)}")
+        raise e
 
 def pdf_to_images(uploaded_file, format='JPEG'):
-    """Convert PDF pages to images"""
+    """Convert PDF pages to images using PyMuPDF"""
     try:
-        images = convert_from_bytes(uploaded_file.read(), dpi=200)
+        import fitz  # PyMuPDF
+        
+        pdf_document = fitz.open(stream=uploaded_file.read(), filetype="pdf")
         
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            for i, image in enumerate(images):
+            for page_num in range(min(len(pdf_document), 20)):  # Limit to 20 pages
+                page = pdf_document.load_page(page_num)
+                
+                # Convert page to image with good quality
+                pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
+                img_data = pix.tobytes("png")
+                
+                # Convert to PIL Image and then to desired format
+                img = Image.open(io.BytesIO(img_data))
+                if format == 'JPEG' and img.mode == 'RGBA':
+                    img = img.convert('RGB')
+                
                 img_byte_arr = io.BytesIO()
-                if format == 'JPEG' and image.mode == 'RGBA':
-                    image = image.convert('RGB')
-                image.save(img_byte_arr, format=format)
+                img.save(img_byte_arr, format=format)
                 img_byte_arr.seek(0)
-                zip_file.writestr(f'page_{i+1}.{format.lower()}', img_byte_arr.getvalue())
+                zip_file.writestr(f'page_{page_num+1}.{format.lower()}', img_byte_arr.getvalue())
+                
+                pix = None  # Release memory
         
+        pdf_document.close()
         zip_buffer.seek(0)
         return zip_buffer
     except Exception as e:
-        st.error(f"Error: {str(e)}\nNote: Make sure poppler-utils is installed for PDF to image conversion")
+        st.error(f"Error: {str(e)}")
         return None
 
 def merge_pdfs(uploaded_files):
-    """Merge multiple PDFs with memory optimization"""
+    """Merge multiple PDFs using PyMuPDF"""
     try:
+        import fitz  # PyMuPDF
+        
         # Validate total file size
         total_size = sum(len(file.getvalue()) for file in uploaded_files)
         if total_size > 100 * 1024 * 1024:  # 100MB limit
             raise ValueError("Total file size too large. Please keep total size under 100MB.")
         
-        pdf_writer = PyPDF2.PdfWriter()
+        merged_pdf = fitz.open()
         total_pages = 0
         
         for uploaded_file in uploaded_files:
@@ -1248,135 +1452,196 @@ def merge_pdfs(uploaded_files):
             uploaded_file.seek(0)
             
             # Read PDF
-            pdf_reader = PyPDF2.PdfReader(uploaded_file)
-            current_pages = len(pdf_reader.pages)
+            pdf_document = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+            current_pages = len(pdf_document)
             
             # Check page limit
             total_pages += current_pages
             if total_pages > 500:  # Limit total pages
+                pdf_document.close()
                 raise ValueError("Too many pages. Please keep total pages under 500.")
             
-            # Add pages with memory optimization
-            for page in pdf_reader.pages:
-                pdf_writer.add_page(page)
-                # Clear page from memory
-                page.clear()
+            # Insert all pages from this PDF
+            merged_pdf.insert_pdf(pdf_document)
+            pdf_document.close()
         
-        # Write output with compression
+        # Write output
         output = io.BytesIO()
-        pdf_writer.write(output)
+        merged_pdf.save(output)
+        merged_pdf.close()
         output.seek(0)
         
-        # Clear writer from memory
-        pdf_writer.close()
         return output
     except Exception as e:
         st.error(f"Error: {str(e)}")
         return None
 
 def split_pdf(uploaded_file, split_at):
-    """Split PDF at specific page"""
+    """Split PDF at specific page using PyMuPDF"""
     try:
-        pdf_reader = PyPDF2.PdfReader(uploaded_file)
+        import fitz  # PyMuPDF
+        
+        pdf_document = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+        total_pages = len(pdf_document)
         
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            pdf_writer1 = PyPDF2.PdfWriter()
-            for i in range(min(split_at, len(pdf_reader.pages))):
-                pdf_writer1.add_page(pdf_reader.pages[i])
+            # Create first part (pages 0 to split_at-1)
+            if split_at > 0:
+                pdf_part1 = fitz.open()
+                pdf_part1.insert_pdf(pdf_document, from_page=0, to_page=min(split_at-1, total_pages-1))
+                
+                output1 = io.BytesIO()
+                pdf_part1.save(output1)
+                pdf_part1.close()
+                output1.seek(0)
+                zip_file.writestr('part1.pdf', output1.getvalue())
             
-            output1 = io.BytesIO()
-            pdf_writer1.write(output1)
-            output1.seek(0)
-            zip_file.writestr('part1.pdf', output1.getvalue())
-            
-            if split_at < len(pdf_reader.pages):
-                pdf_writer2 = PyPDF2.PdfWriter()
-                for i in range(split_at, len(pdf_reader.pages)):
-                    pdf_writer2.add_page(pdf_reader.pages[i])
+            # Create second part (pages split_at to end)
+            if split_at < total_pages:
+                pdf_part2 = fitz.open()
+                pdf_part2.insert_pdf(pdf_document, from_page=split_at, to_page=total_pages-1)
                 
                 output2 = io.BytesIO()
-                pdf_writer2.write(output2)
+                pdf_part2.save(output2)
+                pdf_part2.close()
                 output2.seek(0)
                 zip_file.writestr('part2.pdf', output2.getvalue())
         
+        pdf_document.close()
         zip_buffer.seek(0)
         return zip_buffer
     except Exception as e:
         st.error(f"Error: {str(e)}")
         return None
 
+@handle_conversion_errors
 def compress_pdf(uploaded_file):
-    """Compress PDF (basic implementation)"""
-    try:
-        pdf_reader = PyPDF2.PdfReader(uploaded_file)
-        pdf_writer = PyPDF2.PdfWriter()
-        
-        for page in pdf_reader.pages:
-            page.compress_content_streams()
-            pdf_writer.add_page(page)
-        
-        output = io.BytesIO()
-        pdf_writer.write(output)
-        output.seek(0)
-        return output
-    except Exception as e:
-        st.error(f"Error: {str(e)}")
+    """Compress PDF using PyMuPDF"""
+    if not validate_file_size(uploaded_file):
         return None
+    
+    try:
+        pdf_document = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+        
+        # Compress by reducing image quality and removing unnecessary data
+        for page_num in range(len(pdf_document)):
+            page = pdf_document.load_page(page_num)
+            
+            # Get images and compress them
+            image_list = page.get_images()
+            for img_index, img in enumerate(image_list):
+                xref = img[0]
+                pix = fitz.Pixmap(pdf_document, xref)
+                
+                if pix.n - pix.alpha < 4:  # GRAY or RGB
+                    # Compress image
+                    img_data = pix.tobytes("jpeg", jpg_quality=70)
+                    
+                    # Replace image in PDF
+                    pdf_document.update_stream(xref, img_data)
+                
+                pix = None
+        
+        # Save with compression
+        output = io.BytesIO()
+        pdf_document.save(output, garbage=4, deflate=True, clean=True)
+        pdf_document.close()
+        output.seek(0)
+        clear_memory()
+        return output
+        
+    except Exception as e:
+        logger.error(f"PDF compression error: {str(e)}")
+        raise e
 
+@handle_conversion_errors
 def rotate_pdf(uploaded_file, rotation):
-    """Rotate PDF pages"""
+    """Rotate PDF pages using PyMuPDF"""
+    if not validate_file_size(uploaded_file):
+        return None
+    
     try:
-        pdf_reader = PyPDF2.PdfReader(uploaded_file)
-        pdf_writer = PyPDF2.PdfWriter()
+        pdf_document = fitz.open(stream=uploaded_file.read(), filetype="pdf")
         
-        for page in pdf_reader.pages:
-            page.rotate(rotation)
-            pdf_writer.add_page(page)
+        for page_num in range(len(pdf_document)):
+            page = pdf_document.load_page(page_num)
+            page.set_rotation(rotation)
         
         output = io.BytesIO()
-        pdf_writer.write(output)
+        pdf_document.save(output)
+        pdf_document.close()
         output.seek(0)
+        clear_memory()
         return output
+        
     except Exception as e:
-        st.error(f"Error: {str(e)}")
-        return None
+        logger.error(f"PDF rotation error: {str(e)}")
+        raise e
 
+@handle_conversion_errors
 def remove_pdf_pages(uploaded_file, pages_to_remove):
-    """Remove specific pages from PDF"""
+    """Remove specific pages from PDF using PyMuPDF"""
+    if not validate_file_size(uploaded_file):
+        return None
+    
     try:
-        pdf_reader = PyPDF2.PdfReader(uploaded_file)
-        pdf_writer = PyPDF2.PdfWriter()
+        pdf_document = fitz.open(stream=uploaded_file.read(), filetype="pdf")
         
-        for i, page in enumerate(pdf_reader.pages):
-            if i + 1 not in pages_to_remove:
-                pdf_writer.add_page(page)
+        # Convert to 0-based indexing and sort in reverse order
+        pages_to_remove = sorted([int(p) - 1 for p in pages_to_remove], reverse=True)
+        
+        # Remove pages (in reverse order to maintain indices)
+        for page_num in pages_to_remove:
+            if 0 <= page_num < len(pdf_document):
+                pdf_document.delete_page(page_num)
+        
+        if len(pdf_document) == 0:
+            raise ValueError("Cannot remove all pages from PDF")
         
         output = io.BytesIO()
-        pdf_writer.write(output)
+        pdf_document.save(output)
+        pdf_document.close()
         output.seek(0)
+        clear_memory()
         return output
+        
     except Exception as e:
-        st.error(f"Error: {str(e)}")
-        return None
+        logger.error(f"PDF page removal error: {str(e)}")
+        raise e
 
+@handle_conversion_errors
 def extract_pdf_pages(uploaded_file, pages_to_extract):
-    """Extract specific pages from PDF"""
+    """Extract specific pages from PDF using PyMuPDF"""
+    if not validate_file_size(uploaded_file):
+        return None
+    
     try:
-        pdf_reader = PyPDF2.PdfReader(uploaded_file)
-        pdf_writer = PyPDF2.PdfWriter()
+        pdf_document = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+        new_pdf = fitz.open()
         
-        for page_num in pages_to_extract:
-            if 0 < page_num <= len(pdf_reader.pages):
-                pdf_writer.add_page(pdf_reader.pages[page_num - 1])
+        # Convert to 0-based indexing
+        pages_to_extract = [int(p) - 1 for p in pages_to_extract]
+        
+        # Extract pages
+        for page_num in sorted(pages_to_extract):
+            if 0 <= page_num < len(pdf_document):
+                new_pdf.insert_pdf(pdf_document, from_page=page_num, to_page=page_num)
+        
+        if new_pdf.page_count == 0:
+            raise ValueError("No valid pages found to extract")
         
         output = io.BytesIO()
-        pdf_writer.write(output)
+        new_pdf.save(output)
+        pdf_document.close()
+        new_pdf.close()
         output.seek(0)
+        clear_memory()
         return output
+        
     except Exception as e:
-        st.error(f"Error: {str(e)}")
-        return None
+        logger.error(f"PDF page extraction error: {str(e)}")
+        raise e
 
 def convert_image_format(uploaded_file, output_format):
     """Convert between image formats"""
@@ -1566,79 +1831,112 @@ elif conversion_type == "Text to PDF":
 elif conversion_type == "PDF to Word":
     uploaded_file = st.file_uploader("Upload PDF", type=['pdf'])
     if uploaded_file and st.button("Convert to Word"):
-        with st.spinner("Converting..."):
-            result = pdf_to_word(uploaded_file)
+        try:
+            with st.spinner("Converting PDF to Word..."):
+                result = pdf_to_word(uploaded_file)
             if result:
                 st.success("✅ Conversion successful!")
                 st.download_button("📥 Download Word", result, f"{Path(uploaded_file.name).stem}.docx", 
                                  "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        except Exception as e:
+            st.error(f"❌ Conversion failed: {str(e)}")
+            logger.error(f"PDF to Word conversion error: {str(e)}")
 
 elif conversion_type == "PDF to Excel":
     uploaded_file = st.file_uploader("Upload PDF", type=['pdf'])
     if uploaded_file and st.button("Convert to Excel"):
-        with st.spinner("Converting..."):
-            result = pdf_to_excel(uploaded_file)
+        try:
+            with st.spinner("Converting PDF to Excel..."):
+                result = pdf_to_excel(uploaded_file)
             if result:
                 st.success("✅ Conversion successful!")
                 st.download_button("📥 Download Excel", result, f"{Path(uploaded_file.name).stem}.xlsx",
                                  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        except Exception as e:
+            st.error(f"❌ Conversion failed: {str(e)}")
+            logger.error(f"PDF to Excel conversion error: {str(e)}")
 
 elif conversion_type == "PDF to PowerPoint":
     uploaded_file = st.file_uploader("Upload PDF", type=['pdf'])
     if uploaded_file and st.button("Convert to PowerPoint"):
-        with st.spinner("Converting..."):
-            result = pdf_to_ppt(uploaded_file)
+        try:
+            with st.spinner("Converting PDF to PowerPoint..."):
+                result = pdf_to_ppt(uploaded_file)
             if result:
                 st.success("✅ Conversion successful!")
                 st.download_button("📥 Download PowerPoint", result, f"{Path(uploaded_file.name).stem}.pptx",
                                  "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+        except Exception as e:
+            st.error(f"❌ Conversion failed: {str(e)}")
+            logger.error(f"PDF to PowerPoint conversion error: {str(e)}")
 
 elif conversion_type == "PDF to Text":
     uploaded_file = st.file_uploader("Upload PDF", type=['pdf'])
     if uploaded_file and st.button("Extract Text"):
-        with st.spinner("Extracting..."):
-            result = pdf_to_text(uploaded_file)
+        try:
+            with st.spinner("Extracting text from PDF..."):
+                result = pdf_to_text(uploaded_file)
             if result:
                 st.success("✅ Text extracted successfully!")
                 st.text_area("Extracted Text", result, height=300)
                 st.download_button("📥 Download Text", result, f"{Path(uploaded_file.name).stem}.txt", "text/plain")
+        except Exception as e:
+            st.error(f"❌ Text extraction failed: {str(e)}")
+            logger.error(f"PDF to Text conversion error: {str(e)}")
 
 elif conversion_type in ["PDF to JPG", "PDF to PNG"]:
     format_type = conversion_type.split()[-1].upper()
     uploaded_file = st.file_uploader("Upload PDF", type=['pdf'])
     if uploaded_file and st.button(f"Convert to {format_type}"):
-        with st.spinner("Converting..."):
-            result = pdf_to_images(uploaded_file, format_type)
+        try:
+            with st.spinner(f"Converting PDF to {format_type} images..."):
+                result = pdf_to_images(uploaded_file, format_type)
             if result:
                 st.success("✅ Conversion successful! Multiple images will be downloaded as ZIP")
                 st.download_button("📥 Download Images (ZIP)", result, f"{Path(uploaded_file.name).stem}_images.zip", "application/zip")
+        except Exception as e:
+            st.error(f"❌ Conversion failed: {str(e)}")
+            logger.error(f"PDF to {format_type} conversion error: {str(e)}")
 
 elif conversion_type == "Extract PDF Images":
     uploaded_file = st.file_uploader("Upload PDF", type=['pdf'])
     if uploaded_file and st.button("Extract Images"):
-        with st.spinner("Extracting..."):
-            result = pdf_to_images(uploaded_file, 'PNG')
+        try:
+            with st.spinner("Extracting images from PDF..."):
+                result = pdf_to_images(uploaded_file, 'PNG')
             if result:
                 st.success("✅ Images extracted successfully!")
                 st.download_button("📥 Download Images (ZIP)", result, f"{Path(uploaded_file.name).stem}_extracted.zip", "application/zip")
+        except Exception as e:
+            st.error(f"❌ Image extraction failed: {str(e)}")
+            logger.error(f"PDF image extraction error: {str(e)}")
 
 elif conversion_type == "Merge PDF":
     uploaded_files = st.file_uploader("Upload PDF files to merge", type=['pdf'], accept_multiple_files=True)
     if uploaded_files and len(uploaded_files) > 1 and st.button("Merge PDFs"):
-        with st.spinner("Merging..."):
-            result = merge_pdfs(uploaded_files)
+        try:
+            with st.spinner("Merging PDFs..."):
+                result = merge_pdfs(uploaded_files)
             if result:
                 st.success("✅ PDFs merged successfully!")
                 st.download_button("📥 Download Merged PDF", result, "merged.pdf", "application/pdf")
+        except Exception as e:
+            st.error(f"❌ Merge failed: {str(e)}")
     elif uploaded_files and len(uploaded_files) == 1:
-        st.warning("Please upload at least 2 PDF files to merge")
+        st.warning("⚠️ Please upload at least 2 PDF files to merge")
 
 elif conversion_type == "Split PDF":
     uploaded_file = st.file_uploader("Upload PDF", type=['pdf'])
     if uploaded_file:
-        pdf_reader = PyPDF2.PdfReader(uploaded_file)
-        total_pages = len(pdf_reader.pages)
-        st.info(f"📄 PDF has {total_pages} pages")
+        try:
+            pdf_document = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+            total_pages = len(pdf_document)
+            pdf_document.close()
+            uploaded_file.seek(0)  # Reset file pointer
+            st.info(f"📄 PDF has {total_pages} pages")
+        except Exception as e:
+            st.error(f"Error reading PDF: {str(e)}")
+            total_pages = 0
         
         split_at = st.number_input("Split at page number", min_value=1, max_value=total_pages-1, value=1)
         
@@ -1652,8 +1950,9 @@ elif conversion_type == "Split PDF":
 elif conversion_type == "Compress PDF":
     uploaded_file = st.file_uploader("Upload PDF", type=['pdf'])
     if uploaded_file and st.button("Compress PDF"):
-        with st.spinner("Compressing..."):
-            result = compress_pdf(uploaded_file)
+        try:
+            with st.spinner("Compressing PDF..."):
+                result = compress_pdf(uploaded_file)
             if result:
                 original_size = len(uploaded_file.getvalue())
                 compressed_size = len(result.getvalue())
@@ -1662,6 +1961,8 @@ elif conversion_type == "Compress PDF":
                 st.success(f"✅ PDF compressed successfully!")
                 st.info(f"Size reduction: {reduction:.1f}%")
                 st.download_button("📥 Download Compressed PDF", result, f"{Path(uploaded_file.name).stem}_compressed.pdf", "application/pdf")
+        except Exception as e:
+            st.error(f"❌ Compression failed: {str(e)}")
 
 elif conversion_type == "Rotate PDF":
     uploaded_file = st.file_uploader("Upload PDF", type=['pdf'])
@@ -1669,51 +1970,64 @@ elif conversion_type == "Rotate PDF":
         rotation = st.selectbox("Select rotation angle", [90, 180, 270])
         
         if st.button("Rotate PDF"):
-            with st.spinner("Rotating..."):
-                result = rotate_pdf(uploaded_file, rotation)
+            try:
+                with st.spinner("Rotating PDF..."):
+                    result = rotate_pdf(uploaded_file, rotation)
                 if result:
                     st.success("✅ PDF rotated successfully!")
                     st.download_button("📥 Download Rotated PDF", result, f"{Path(uploaded_file.name).stem}_rotated.pdf", "application/pdf")
+            except Exception as e:
+                st.error(f"❌ Rotation failed: {str(e)}")
 
 elif conversion_type == "Remove PDF Pages":
     uploaded_file = st.file_uploader("Upload PDF", type=['pdf'])
     if uploaded_file:
-        pdf_reader = PyPDF2.PdfReader(uploaded_file)
-        total_pages = len(pdf_reader.pages)
-        st.info(f"📄 PDF has {total_pages} pages")
-        
-        pages_input = st.text_input("Enter page numbers to remove (comma-separated, e.g., 1,3,5)")
-        
-        if st.button("Remove Pages"):
-            try:
-                pages_to_remove = [int(p.strip()) for p in pages_input.split(',') if p.strip()]
-                with st.spinner("Removing pages..."):
-                    result = remove_pdf_pages(uploaded_file, pages_to_remove)
-                    if result:
-                        st.success(f"✅ Removed {len(pages_to_remove)} pages successfully!")
-                        st.download_button("📥 Download PDF", result, f"{Path(uploaded_file.name).stem}_modified.pdf", "application/pdf")
-            except ValueError:
-                st.error("Please enter valid page numbers")
+        try:
+            pdf_document = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+            total_pages = len(pdf_document)
+            pdf_document.close()
+            uploaded_file.seek(0)  # Reset file pointer
+            st.info(f"📄 PDF has {total_pages} pages")
+            
+            pages_input = st.text_input("Enter page numbers to remove (comma-separated, e.g., 1,3,5)")
+            
+            if st.button("Remove Pages"):
+                try:
+                    pages_to_remove = [int(p.strip()) for p in pages_input.split(',') if p.strip()]
+                    with st.spinner("Removing pages..."):
+                        result = remove_pdf_pages(uploaded_file, pages_to_remove)
+                        if result:
+                            st.success(f"✅ Removed {len(pages_to_remove)} pages successfully!")
+                            st.download_button("📥 Download PDF", result, f"{Path(uploaded_file.name).stem}_modified.pdf", "application/pdf")
+                except ValueError:
+                    st.error("Please enter valid page numbers")
+        except Exception as e:
+            st.error(f"Error reading PDF: {str(e)}")
 
 elif conversion_type == "Extract PDF Pages":
     uploaded_file = st.file_uploader("Upload PDF", type=['pdf'])
     if uploaded_file:
-        pdf_reader = PyPDF2.PdfReader(uploaded_file)
-        total_pages = len(pdf_reader.pages)
-        st.info(f"📄 PDF has {total_pages} pages")
-        
-        pages_input = st.text_input("Enter page numbers to extract (comma-separated, e.g., 1,3,5)")
-        
-        if st.button("Extract Pages"):
-            try:
-                pages_to_extract = [int(p.strip()) for p in pages_input.split(',') if p.strip()]
-                with st.spinner("Extracting pages..."):
-                    result = extract_pdf_pages(uploaded_file, pages_to_extract)
-                    if result:
-                        st.success(f"✅ Extracted {len(pages_to_extract)} pages successfully!")
-                        st.download_button("📥 Download PDF", result, f"{Path(uploaded_file.name).stem}_extracted.pdf", "application/pdf")
-            except ValueError:
-                st.error("Please enter valid page numbers")
+        try:
+            pdf_document = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+            total_pages = len(pdf_document)
+            pdf_document.close()
+            uploaded_file.seek(0)  # Reset file pointer
+            st.info(f"📄 PDF has {total_pages} pages")
+            
+            pages_input = st.text_input("Enter page numbers to extract (comma-separated, e.g., 1,3,5)")
+            
+            if st.button("Extract Pages"):
+                try:
+                    pages_to_extract = [int(p.strip()) for p in pages_input.split(',') if p.strip()]
+                    with st.spinner("Extracting pages..."):
+                        result = extract_pdf_pages(uploaded_file, pages_to_extract)
+                        if result:
+                            st.success(f"✅ Extracted {len(pages_to_extract)} pages successfully!")
+                            st.download_button("📥 Download PDF", result, f"{Path(uploaded_file.name).stem}_extracted.pdf", "application/pdf")
+                except ValueError:
+                    st.error("Please enter valid page numbers")
+        except Exception as e:
+            st.error(f"Error reading PDF: {str(e)}")
 
 elif conversion_type in ["JPG to PNG", "PNG to JPG"]:
     input_format = conversion_type.split()[0].lower()
